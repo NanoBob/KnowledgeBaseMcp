@@ -82,6 +82,7 @@ public sealed class ApiKeyRecord
     public string KeyHash { get; set; } = "";
     public List<KeyScope> Scopes { get; set; } = [];
     public DateTime CreatedAt { get; set; }
+    public DateTime? RotatedAt { get; set; }
     public DateTime? RevokedAt { get; set; }
 }
 

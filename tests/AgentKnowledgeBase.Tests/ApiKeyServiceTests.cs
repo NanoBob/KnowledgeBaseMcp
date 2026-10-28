@@ -136,4 +136,61 @@ public class ApiKeyServiceTests
         var scope = Assert.Single(record.Scopes);
         Assert.Equal(AccessLevel.ReadWrite, scope.Access);
     }
+
+    [Fact]
+    public async Task Regenerate_KeepsNameAndScopesAndIssuesNewSecret()
+    {
+        var directoryId = await CreateDirectoryAsync();
+        var (original, oldPlain) = await _service.CreateAsync("agent-a",
+            [new KeyScopeInput(directoryId, "readwrite")], default);
+
+        var (rotated, newPlain) = await _service.RegenerateAsync(original.Id, default);
+
+        Assert.NotEqual(oldPlain, newPlain);
+        Assert.Equal(original.Id, rotated.Id);
+        Assert.Equal("agent-a", rotated.Name);
+        Assert.Equal(ApiKeyService.Hash(newPlain), rotated.KeyHash);
+        Assert.Equal(directoryId, Assert.Single(rotated.Scopes).DirectoryId);
+        Assert.Equal(AccessLevel.ReadWrite, rotated.Scopes[0].Access);
+        Assert.NotNull(rotated.RotatedAt);
+        Assert.Null(rotated.RevokedAt);
+    }
+
+    [Fact]
+    public async Task Regenerate_InvalidatesThePreviousSecret()
+    {
+        var directoryId = await CreateDirectoryAsync();
+        var (original, oldPlain) = await _service.CreateAsync("agent-a",
+            [new KeyScopeInput(directoryId, "read")], default);
+
+        var (_, newPlain) = await _service.RegenerateAsync(original.Id, default);
+
+        Assert.Null(await _service.AuthenticateAsync(oldPlain, default));
+        var caller = await _service.AuthenticateAsync(newPlain, default);
+        Assert.NotNull(caller);
+        Assert.Equal(original.Id, caller.KeyId);
+        Assert.True(caller.CanRead(directoryId));
+        Assert.False(caller.CanWrite(directoryId));
+    }
+
+    [Fact]
+    public async Task Regenerate_UnknownKey_IsNotFound()
+    {
+        var ex = await Assert.ThrowsAsync<KnowledgeException>(() =>
+            _service.RegenerateAsync(Guid.NewGuid(), default));
+
+        Assert.Equal(KnowledgeErrorKind.NotFound, ex.Kind);
+    }
+
+    [Fact]
+    public async Task Regenerate_RevokedKey_IsNotFound()
+    {
+        var directoryId = await CreateDirectoryAsync();
+        var (record, _) = await _service.CreateAsync("agent-a", [new KeyScopeInput(directoryId, "read")], default);
+        await _service.RevokeAsync(record.Id, default);
+
+        var ex = await Assert.ThrowsAsync<KnowledgeException>(() => _service.RegenerateAsync(record.Id, default));
+
+        Assert.Equal(KnowledgeErrorKind.NotFound, ex.Kind);
+    }
 }

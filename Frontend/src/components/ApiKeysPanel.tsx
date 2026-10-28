@@ -20,7 +20,10 @@ export function ApiKeysPanel({ directories, notifier }: Props) {
   const [name, setName] = useState('')
   const [scopes, setScopes] = useState<ScopeRow[]>([])
   const [creating, setCreating] = useState(false)
-  const [createdKey, setCreatedKey] = useState<{ name: string; key: string } | null>(null)
+  const [regeneratingId, setRegeneratingId] = useState<string | null>(null)
+  const [createdKey, setCreatedKey] = useState<{ name: string; key: string; action: 'created' | 'regenerated' } | null>(
+    null,
+  )
   const [copied, setCopied] = useState(false)
 
   const directoryNames = useMemo(
@@ -80,7 +83,7 @@ export function ApiKeysPanel({ directories, notifier }: Props) {
         name: name.trim(),
         scopes: rows.map((row) => ({ directoryId: row.directoryId, access: row.access })),
       })
-      setCreatedKey({ name: created.name, key: created.key })
+      setCreatedKey({ name: created.name, key: created.key, action: 'created' })
       setCopied(false)
       setName('')
       setScopes(firstDirectoryId !== '' ? [{ directoryId: firstDirectoryId, access: 'read' }] : [])
@@ -103,6 +106,29 @@ export function ApiKeysPanel({ directories, notifier }: Props) {
     }
   }
 
+  async function regenerate(key: ApiKeySummary) {
+    if (
+      !window.confirm(
+        `Regenerate "${key.name}"? The current key stops working immediately; the new key keeps the same permissions and is shown once.`,
+      )
+    ) {
+      return
+    }
+
+    setRegeneratingId(key.id)
+    try {
+      const rotated = await api.regenerateApiKey(key.id)
+      setCreatedKey({ name: rotated.name, key: rotated.key, action: 'regenerated' })
+      setCopied(false)
+      await load()
+      notifier.flash(`Regenerated "${rotated.name}".`)
+    } catch (cause) {
+      notifier.error(cause)
+    } finally {
+      setRegeneratingId(null)
+    }
+  }
+
   async function revoke(key: ApiKeySummary) {
     if (!window.confirm(`Revoke "${key.name}"? Agents using it lose access immediately.`)) return
     try {
@@ -120,7 +146,8 @@ export function ApiKeysPanel({ directories, notifier }: Props) {
         <div>
           <h2>API keys</h2>
           <p className="muted">
-            Keys grant read or read-write access per directory. The plaintext key is shown once, right after creation.
+            Keys grant read or read-write access per directory. The plaintext key is shown once, right after creation or
+            regeneration.
           </p>
         </div>
       </header>
@@ -176,7 +203,7 @@ export function ApiKeysPanel({ directories, notifier }: Props) {
           </div>
         </div>
 
-        {createdKey !== null ? (
+        {createdKey !== null && createdKey.action === 'created' ? (
           <div className="secret">
             <div className="secret-head">
               <strong>Copy this key now</strong>
@@ -189,6 +216,21 @@ export function ApiKeysPanel({ directories, notifier }: Props) {
           </div>
         ) : null}
       </div>
+
+      {createdKey !== null && createdKey.action === 'regenerated' ? (
+        <div className="card secret">
+          <div className="secret-head">
+            <strong>New key for “{createdKey.name}”</strong>
+            <button type="button" onClick={() => void copyKey()}>
+              {copied ? 'Copied' : 'Copy'}
+            </button>
+          </div>
+          <code className="secret-value">{createdKey.key}</code>
+          <p className="muted">
+            The previous key no longer works and the permissions are unchanged. This key cannot be shown again.
+          </p>
+        </div>
+      ) : null}
 
       {loading ? (
         <p className="muted">Loading keys…</p>
@@ -232,12 +274,24 @@ export function ApiKeysPanel({ directories, notifier }: Props) {
                   ) : (
                     <span className="status revoked">revoked</span>
                   )}
+                  {key.rotatedAt !== null ? (
+                    <div className="muted">rotated {formatDate(key.rotatedAt)}</div>
+                  ) : null}
                 </td>
                 <td className="row-actions">
                   {key.revokedAt === null ? (
-                    <button type="button" className="danger" onClick={() => void revoke(key)}>
-                      Revoke
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => void regenerate(key)}
+                        disabled={regeneratingId === key.id}
+                      >
+                        {regeneratingId === key.id ? 'Regenerating…' : 'Regenerate'}
+                      </button>
+                      <button type="button" className="danger" onClick={() => void revoke(key)}>
+                        Revoke
+                      </button>
+                    </>
                   ) : null}
                 </td>
               </tr>

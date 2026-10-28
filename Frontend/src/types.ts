@@ -57,6 +57,7 @@ export interface ApiKeySummary {
   name: string
   scopes: KeyScope[]
   createdAt: string
+  rotatedAt: string | null
   revokedAt: string | null
 }
 

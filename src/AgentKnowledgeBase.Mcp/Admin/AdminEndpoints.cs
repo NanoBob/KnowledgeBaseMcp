@@ -12,7 +12,7 @@ public sealed record CreateKeyScope(Guid? DirectoryId, string? Access);
 
 public sealed record ApiKeyCreatedResponse(Guid Id, string Name, string Key, IReadOnlyList<CreateKeyScope> Scopes, DateTime CreatedAt);
 
-public sealed record ApiKeySummaryResponse(Guid Id, string Name, IReadOnlyList<CreateKeyScope> Scopes, DateTime CreatedAt, DateTime? RevokedAt);
+public sealed record ApiKeySummaryResponse(Guid Id, string Name, IReadOnlyList<CreateKeyScope> Scopes, DateTime CreatedAt, DateTime? RotatedAt, DateTime? RevokedAt);
 
 public sealed record CreateDirectoryRequest(string? Name, string? Description);
 
@@ -122,20 +122,20 @@ public static class AdminEndpoints
         {
             var scopes = request.Scopes?.Select(s => new KeyScopeInput(s.DirectoryId, s.Access)).ToList();
             var (record, plainText) = await keys.CreateAsync(request.Name, scopes, ct);
-            var response = new ApiKeyCreatedResponse(
-                record.Id,
-                record.Name,
-                plainText,
-                record.Scopes.Select(ToDto).ToList(),
-                record.CreatedAt);
-            return Results.Created($"/admin/api-keys/{record.Id}", response);
+            return Results.Created($"/admin/api-keys/{record.Id}", ToCreatedResponse(record, plainText));
+        });
+
+        group.MapPost("/{id:guid}/regenerate", async (Guid id, ApiKeyService keys, CancellationToken ct) =>
+        {
+            var (record, plainText) = await keys.RegenerateAsync(id, ct);
+            return Results.Ok(ToCreatedResponse(record, plainText));
         });
 
         group.MapGet("/", async (ApiKeyService keys, CancellationToken ct) =>
         {
             var records = await keys.ListAsync(ct);
             return Results.Ok(records.Select(r => new ApiKeySummaryResponse(
-                r.Id, r.Name, r.Scopes.Select(ToDto).ToList(), r.CreatedAt, r.RevokedAt)));
+                r.Id, r.Name, r.Scopes.Select(ToDto).ToList(), r.CreatedAt, r.RotatedAt, r.RevokedAt)));
         });
 
         group.MapDelete("/{id:guid}", async (Guid id, ApiKeyService keys, CancellationToken ct) =>
@@ -165,6 +165,9 @@ public static class AdminEndpoints
 
     private static CreateKeyScope ToDto(KeyScope scope) =>
         new(scope.DirectoryId, scope.Access.ToString().ToLowerInvariant());
+
+    private static ApiKeyCreatedResponse ToCreatedResponse(ApiKeyRecord record, string plainText) =>
+        new(record.Id, record.Name, plainText, record.Scopes.Select(ToDto).ToList(), record.CreatedAt);
 
     private static bool IsAdmin(HttpRequest request, string expectedToken)
     {

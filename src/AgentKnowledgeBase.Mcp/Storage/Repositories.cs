@@ -66,6 +66,12 @@ public interface IApiKeyRepository
 
     /// <summary>Marks the key revoked. Returns false when no active key with that id exists.</summary>
     Task<bool> TryRevokeAsync(Guid id, DateTime revokedAt, CancellationToken ct);
+
+    /// <summary>
+    /// Replaces the key's secret in place, keeping its id, name and scopes.
+    /// Returns null when no active key with that id exists.
+    /// </summary>
+    Task<ApiKeyRecord?> TryRotateAsync(Guid id, string newKeyHash, DateTime rotatedAt, CancellationToken ct);
 }
 
 public sealed class MongoDirectoryRepository(IMongoDatabase database) : IDirectoryRepository
@@ -232,6 +238,16 @@ public sealed class MongoApiKeyRepository(IMongoDatabase database) : IApiKeyRepo
         var update = Builders<ApiKeyRecord>.Update.Set(k => k.RevokedAt, revokedAt);
         var result = await _keys.UpdateOneAsync(filter, update, cancellationToken: ct);
         return result.ModifiedCount == 1;
+    }
+
+    public Task<ApiKeyRecord?> TryRotateAsync(Guid id, string newKeyHash, DateTime rotatedAt, CancellationToken ct)
+    {
+        var filter = Builders<ApiKeyRecord>.Filter.Where(k => k.Id == id && k.RevokedAt == null);
+        var update = Builders<ApiKeyRecord>.Update
+            .Set(k => k.KeyHash, newKeyHash)
+            .Set(k => k.RotatedAt, rotatedAt);
+        var options = new FindOneAndUpdateOptions<ApiKeyRecord> { ReturnDocument = ReturnDocument.After };
+        return _keys.FindOneAndUpdateAsync(filter, update, options, ct)!;
     }
 
     public static async Task EnsureIndexesAsync(IMongoDatabase database, CancellationToken ct)

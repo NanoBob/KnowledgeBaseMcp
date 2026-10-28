@@ -24,7 +24,7 @@ public sealed class ApiKeyService(IApiKeyRepository keys, IDirectoryRepository d
         }
 
         var parsedScopes = await ParseScopesAsync(scopes, ct);
-        var plainText = KeyPrefix + Base64UrlEncode(RandomNumberGenerator.GetBytes(32));
+        var plainText = NewPlainTextKey();
 
         var record = new ApiKeyRecord
         {
@@ -36,6 +36,19 @@ public sealed class ApiKeyService(IApiKeyRepository keys, IDirectoryRepository d
         };
 
         await keys.InsertAsync(record, ct);
+        return (record, plainText);
+    }
+
+    /// <summary>
+    /// Issues a new secret for an existing key, keeping its name and permissions.
+    /// The previous secret stops authenticating immediately.
+    /// </summary>
+    public async Task<(ApiKeyRecord Record, string PlainTextKey)> RegenerateAsync(Guid id, CancellationToken ct)
+    {
+        var plainText = NewPlainTextKey();
+        var record = await keys.TryRotateAsync(id, Hash(plainText), DateTime.UtcNow, ct)
+            ?? throw KnowledgeException.NotFound($"no active API key with id '{id}'.");
+
         return (record, plainText);
     }
 
@@ -111,4 +124,7 @@ public sealed class ApiKeyService(IApiKeyRepository keys, IDirectoryRepository d
 
     private static string Base64UrlEncode(byte[] bytes) =>
         Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+
+    private static string NewPlainTextKey() =>
+        KeyPrefix + Base64UrlEncode(RandomNumberGenerator.GetBytes(32));
 }

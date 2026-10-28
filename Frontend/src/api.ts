@@ -137,4 +137,6 @@ export const api = {
   createApiKey: (input: NewApiKeyInput) =>
     request<ApiKeyCreated>('/admin/api-keys', { method: 'POST', body: JSON.stringify(input) }),
   revokeApiKey: (id: string) => request<void>(`/admin/api-keys/${id}`, { method: 'DELETE' }),
+  regenerateApiKey: (id: string) =>
+    request<ApiKeyCreated>(`/admin/api-keys/${id}/regenerate`, { method: 'POST' }),
 }
