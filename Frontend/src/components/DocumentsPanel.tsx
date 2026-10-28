@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import { ApiError, api, describeError } from '../api'
 import type { Directory, DocumentDetail, DocumentSummary, RevisionDetail, RevisionSummary } from '../types'
-import { Empty, Field, Modal, Spinner, formatDate } from './ui'
+import { Empty, Field, Modal, Skeleton, formatDate } from './ui'
 import type { Notifier } from './ui'
 import { Markdown } from './Markdown'
 
@@ -48,6 +48,66 @@ interface Props {
   onChanged: () => Promise<void>
 }
 
+// The real form with skeletonised content inside its controls, so nothing shifts when the
+// document arrives.
+function LoadingEditor({ name, version }: { name?: string; version?: number }) {
+  return (
+    <div className="editor" aria-busy="true" aria-label="Loading document">
+      <div className="editor-head">
+        {name === undefined ? <Skeleton className="skeleton-title" /> : <h2>{name}</h2>}
+        {version === undefined ? null : <span className="pill">version {version}</span>}
+      </div>
+
+      <div className="editor-grid">
+        <Field label="Directory">
+          <SkeletonControl kind="select" />
+        </Field>
+        <Field label="Name" hint="Unique inside the directory. Max 200 characters.">
+          <SkeletonControl />
+        </Field>
+        <Field label="Summary" hint="One line for list views. Max 500 characters.">
+          <SkeletonControl />
+        </Field>
+        <Field label="Tags" hint="Comma separated, e.g. process, onboarding">
+          <SkeletonControl />
+        </Field>
+      </div>
+
+      <Field label="Content" className="content-field" hint="Markdown. Max 100 KB per version.">
+        <div className="skeleton-content">
+          {[92, 78, 86, 61, 88, 70, 44].map((width, line) => (
+            <Skeleton key={line} className="skeleton-line" style={{ width: `${width}%` }} />
+          ))}
+        </div>
+      </Field>
+
+      <div className="editor-actions">
+        <button type="button" className="primary" disabled>
+          Save
+        </button>
+        <button type="button" disabled>
+          Move…
+        </button>
+        <button type="button" disabled>
+          History
+        </button>
+        <button type="button" disabled>
+          Delete
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function SkeletonControl({ kind }: { kind?: 'select' }) {
+  return (
+    <span className={kind === 'select' ? 'control-skeleton select' : 'control-skeleton'} aria-hidden="true">
+      <Skeleton className="skeleton-text" />
+      {kind === 'select' ? <span className="control-chevron" /> : null}
+    </span>
+  )
+}
+
 export function DocumentsPanel({ directories, documents, notifier, onChanged }: Props) {
   const [filter, setFilter] = useState('')
   const [search, setSearch] = useState('')
@@ -61,22 +121,27 @@ export function DocumentsPanel({ directories, documents, notifier, onChanged }: 
   const [failedId, setFailedId] = useState<string | null>(null)
   const [attempt, setAttempt] = useState(0)
   const [showPreview, setShowPreview] = useState(() => window.localStorage.getItem(PREVIEW_KEY) === '1')
+  const [moveTarget, setMoveTarget] = useState<string | null>(null)
 
   useEffect(() => {
     window.localStorage.setItem(PREVIEW_KEY, showPreview ? '1' : '0')
   }, [showPreview])
 
   const selectedId = selection.kind === 'document' ? selection.id : null
-  // Derived from state rather than a fetch flag so the spinner is up on the very first paint.
+  // Derived from state rather than a fetch flag so the skeleton is up on the very first paint.
   const opening = selectedId !== null && selectedId !== loadedId && selectedId !== failedId
+  // The list already knows the name and version, so the loading form can show them.
+  const openingSummary = documents.find((document) => document.id === selectedId)
 
   useEffect(() => {
     if (selectedId === null) {
       setDetail(null)
       setRevisions(null)
+      setMoveTarget(null)
       return
     }
 
+    setMoveTarget(null)
     let cancelled = false
     api
       .getDocument(selectedId)
@@ -200,6 +265,41 @@ export function DocumentsPanel({ directories, documents, notifier, onChanged }: 
     }
   }
 
+  const moveOptions = useMemo(
+    () => directories.filter((directory) => directory.id !== detail?.directoryId),
+    [directories, detail],
+  )
+
+  function startMove() {
+    if (detail === null) return
+    const first = directories.find((directory) => directory.id !== detail.directoryId)
+    if (first === undefined) {
+      notifier.error(new Error('Create another directory before moving this document.'))
+      return
+    }
+    setMoveTarget(first.id)
+  }
+
+  async function move() {
+    if (selection.kind !== 'document' || detail === null || moveTarget === null) return
+    const targetName = directories.find((directory) => directory.id === moveTarget)?.name ?? 'the new directory'
+    setBusy(true)
+    try {
+      const result = await api.moveDocument(detail.id, moveTarget, detail.version)
+      const fresh = await api.getDocument(detail.id)
+      setDetail(fresh)
+      setDraft(fromDetail(fresh))
+      await onChanged()
+      if (revisions !== null) setRevisions(await api.listRevisions(detail.id))
+      setMoveTarget(null)
+      notifier.flash(`Moved "${result.name}" to ${targetName} as version ${result.version}.`)
+    } catch (cause) {
+      notifier.error(cause)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function toggleRevisions() {
     if (selection.kind !== 'document') return
     if (revisions !== null) {
@@ -276,9 +376,7 @@ export function DocumentsPanel({ directories, documents, notifier, onChanged }: 
           {selection.kind === 'none' ? (
             <Empty>Select a document on the left, or create a new one.</Empty>
           ) : opening ? (
-            <div className="editor">
-              <Spinner label="Loading document…" />
-            </div>
+            <LoadingEditor name={openingSummary?.name} version={openingSummary?.version} />
           ) : selection.kind === 'document' && detail === null ? (
             <Empty>
               <span>That document could not be loaded.</span>
@@ -363,6 +461,14 @@ export function DocumentsPanel({ directories, documents, notifier, onChanged }: 
                 </button>
                 {selection.kind === 'document' ? (
                   <>
+                    <button
+                      type="button"
+                      onClick={startMove}
+                      disabled={busy || directories.length < 2}
+                      title={directories.length < 2 ? 'Create another directory first' : 'Move to another directory'}
+                    >
+                      Move…
+                    </button>
                     <button type="button" onClick={() => void toggleRevisions()} disabled={busy}>
                       {revisions === null ? 'History' : 'Hide history'}
                     </button>
@@ -405,6 +511,31 @@ export function DocumentsPanel({ directories, documents, notifier, onChanged }: 
           )}
         </section>
       </div>
+
+      {moveTarget !== null && detail !== null ? (
+        <Modal title={`Move "${detail.name}"`} onClose={() => setMoveTarget(null)}>
+          <Field
+            label="Destination directory"
+            hint="The name, content and revision history travel with the document. The move records a new revision."
+          >
+            <select value={moveTarget} onChange={(event) => setMoveTarget(event.target.value)}>
+              {moveOptions.map((directory) => (
+                <option key={directory.id} value={directory.id}>
+                  {directory.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <div className="modal-actions">
+            <button type="button" className="primary" onClick={() => void move()} disabled={busy}>
+              {busy ? 'Moving…' : 'Move document'}
+            </button>
+            <button type="button" onClick={() => setMoveTarget(null)} disabled={busy}>
+              Cancel
+            </button>
+          </div>
+        </Modal>
+      ) : null}
 
       {revisionView !== null ? (
         <Modal

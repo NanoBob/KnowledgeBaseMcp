@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 
 export interface Notifier {
   error: (cause: unknown) => void
@@ -56,12 +56,9 @@ export function Empty({ children }: { children: ReactNode }) {
   return <div className="empty">{children}</div>
 }
 
-export function Spinner({ label }: { label?: string }) {
+export function Skeleton({ className, style }: { className?: string; style?: CSSProperties }) {
   return (
-    <div className="spinner-wrap" role="status" aria-live="polite">
-      <span className="spinner" aria-hidden="true" />
-      {label ? <span className="muted">{label}</span> : null}
-    </div>
+    <span className={className ? `skeleton ${className}` : 'skeleton'} style={style} aria-hidden="true" />
   )
 }
 

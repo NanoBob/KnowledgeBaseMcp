@@ -129,6 +129,11 @@ export const api = {
     request<StoreDocumentResult>('/admin/documents', { method: 'POST', body: JSON.stringify(input) }),
   updateDocument: (id: string, input: UpdateDocumentInput) =>
     request<StoreDocumentResult>(`/admin/documents/${id}`, { method: 'PUT', body: JSON.stringify(input) }),
+  moveDocument: (id: string, directoryId: string, expectedVersion?: number) =>
+    request<StoreDocumentResult>(`/admin/documents/${id}/move`, {
+      method: 'POST',
+      body: JSON.stringify({ directoryId, expectedVersion }),
+    }),
   deleteDocument: (id: string) => request<void>(`/admin/documents/${id}`, { method: 'DELETE' }),
   listRevisions: (documentId: string) => request<RevisionSummary[]>(`/admin/documents/${documentId}/revisions`),
   getRevision: (revisionId: string) => request<RevisionDetail>(`/admin/revisions/${revisionId}`),

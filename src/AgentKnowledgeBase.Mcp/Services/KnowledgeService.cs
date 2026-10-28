@@ -177,6 +177,78 @@ public sealed class KnowledgeService(IDocumentRepository documents, IDirectoryRe
             : await UpdateAsync(caller, request, summary, tags, content, ct);
     }
 
+    public async Task<StoreResult> MoveAsync(
+        ApiCaller caller,
+        Guid id,
+        Guid directoryId,
+        int? expectedVersion,
+        CancellationToken ct)
+    {
+        var existing = await documents.FindAsync(id, ct);
+        if (existing is null || !caller.CanRead(existing.DirectoryId))
+        {
+            throw KnowledgeException.NotFound($"document '{id}' was not found.");
+        }
+
+        var source = await directories.FindAsync(existing.DirectoryId, ct)
+            ?? throw KnowledgeException.NotFound($"directory '{existing.DirectoryId}' was not found.");
+
+        if (!caller.CanWrite(source.Id))
+        {
+            throw KnowledgeException.Forbidden($"this key cannot write to directory '{source.Name}'.");
+        }
+
+        if (existing.DirectoryId == directoryId)
+        {
+            return new StoreResult(existing.Id, existing.DirectoryId, existing.Name, existing.Version, Created: false);
+        }
+
+        var target = await directories.FindAsync(directoryId, ct)
+            ?? throw KnowledgeException.NotFound($"directory '{directoryId}' was not found.");
+
+        if (!caller.CanWrite(target.Id))
+        {
+            throw KnowledgeException.Forbidden($"this key cannot write to directory '{target.Name}'.");
+        }
+
+        if (expectedVersion is not null && expectedVersion != existing.Version)
+        {
+            throw KnowledgeException.Conflict(
+                $"document '{id}' is at version {existing.Version}. Retry with expectedVersion={existing.Version} to move it.",
+                existing.Version);
+        }
+
+        var moved = new KnowledgeDocument
+        {
+            Id = existing.Id,
+            DirectoryId = target.Id,
+            Name = existing.Name,
+            Summary = existing.Summary,
+            Tags = existing.Tags,
+            Content = existing.Content,
+            Version = existing.Version + 1,
+            CreatedAt = existing.CreatedAt,
+            UpdatedAt = DateTime.UtcNow,
+            CreatedBy = existing.CreatedBy,
+            UpdatedBy = caller.Name
+        };
+
+        switch (await documents.TryReplaceAsync(moved, existing.Version, ct))
+        {
+            case ReplaceOutcome.NameConflict:
+                throw KnowledgeException.Conflict(
+                    $"a document named '{moved.Name}' already exists in directory '{target.Name}'.");
+            case ReplaceOutcome.VersionMismatch:
+                var latest = await documents.FindAsync(id, ct);
+                throw KnowledgeException.Conflict(
+                    $"document '{id}' changed while moving. Retry with expectedVersion={latest?.Version}.",
+                    latest?.Version);
+        }
+
+        await RecordRevisionAsync(moved, ct);
+        return new StoreResult(moved.Id, moved.DirectoryId, moved.Name, moved.Version, Created: false);
+    }
+
     private async Task<StoreResult> CreateAsync(
         ApiCaller caller,
         StoreRequest request,

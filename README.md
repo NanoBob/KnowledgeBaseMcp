@@ -19,7 +19,7 @@ Three entities, all identified by GUID:
 | `get_knowledge_document` | Get one document by `id`, including markdown `content`. |
 | `store_knowledge_document` | Create or update a document. Updates require `expectedVersion`. |
 
-Creating a document requires `directoryId`, `name`, and `content`; the `id` is generated, so any agent with write access can add documents to its directories. Updating requires the `id` and the `version` you last read. A stale version returns an error with the current version, so the agent can re-read and retry. An update replaces `summary`, `tags`, and `content`, so omitting `summary` clears it; omitting `name` keeps the current one. A document cannot be moved to another directory.
+Creating a document requires `directoryId`, `name`, and `content`; the `id` is generated, so any agent with write access can add documents to its directories. Updating requires the `id` and the `version` you last read. A stale version returns an error with the current version, so the agent can re-read and retry. An update replaces `summary`, `tags`, and `content`, so omitting `summary` clears it; omitting `name` keeps the current one. The agent tools never move a document between directories — that is an admin action (`POST /admin/documents/{id}/move` or the admin UI).
 
 ## Run with Docker Compose
 
@@ -84,6 +84,7 @@ Every call needs the admin token in an `X-Admin-Token` header (or `Authorization
 | `POST` | `/admin/documents` | Create a document from `{ directoryId, name, summary, tags, content }`. |
 | `GET` | `/admin/documents/{id}` | Read a document, including content. |
 | `PUT` | `/admin/documents/{id}` | Update a document. Sends a new revision. |
+| `POST` | `/admin/documents/{id}/move` | Move a document to another directory from `{ directoryId, expectedVersion? }`. |
 | `DELETE` | `/admin/documents/{id}` | Delete a document and its revisions. |
 | `GET` | `/admin/documents/{id}/revisions` | List revision metadata, newest first. |
 | `GET` | `/admin/revisions/{id}` | Read one revision snapshot, including content. |
@@ -93,6 +94,8 @@ Every call needs the admin token in an `X-Admin-Token` header (or `Authorization
 | `DELETE` | `/admin/api-keys/{id}` | Revoke a key. This takes effect on the next request. |
 
 `PUT /admin/documents/{id}` accepts an optional `expectedVersion`. Omit it to overwrite whatever is stored, or send the version you last read to get a `409` when someone else changed the document first.
+
+`POST /admin/documents/{id}/move` keeps the document's name, content and revision history, so the name must be free in the target directory; it bumps the version and records a revision that carries the new `directoryId`.
 
 Errors come back as JSON with an HTTP status that matches the failure:
 
@@ -116,7 +119,7 @@ Open `http://localhost:5173` and paste the admin token; it is kept in `localStor
 
 Screens:
 
-- **Documents** — filter and search by directory, edit metadata and markdown content in an editor that fills the window, toggle a sanitized markdown preview sidebar next to the textarea, delete documents, and open the revision history to read any snapshot.
+- **Documents** — filter and search by directory, edit metadata and markdown content in an editor that fills the window, toggle a sanitized markdown preview sidebar next to the textarea, move a document to another directory, delete documents, and open the revision history to read any snapshot. A skeleton placeholder fills the editor while a document loads.
 - **Directories** — create, rename and delete directories. A directory can only be deleted once it holds no documents.
 - **API keys** — create keys with one `read` or `readwrite` scope per directory, copy the plaintext key once, regenerate a key to rotate its secret in place, and revoke keys.
 

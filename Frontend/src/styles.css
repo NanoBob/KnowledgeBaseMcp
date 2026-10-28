@@ -329,6 +329,22 @@ button.icon:hover:not(:disabled) {
   font-size: 16px;
 }
 
+/* The supplied scroll icon has a dark stroke; masking it keeps the logo white on the accent tile. */
+.brand-mark::before {
+  content: '';
+  width: 23px;
+  height: 23px;
+  background-color: #fff;
+  -webkit-mask: url('/scroll-icon.svg') center / contain no-repeat;
+  mask: url('/scroll-icon.svg') center / contain no-repeat;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
 .topbar-actions {
   display: flex;
   gap: 8px;
@@ -834,37 +850,86 @@ main {
   overflow: auto;
 }
 
-/* ---------- spinner ---------- */
+/* ---------- skeleton loading ---------- */
 
-.spinner-wrap {
-  display: flex;
-  flex: 1;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  min-height: 140px;
-  padding: 24px;
-  font-size: 13px;
+.skeleton {
+  display: block;
+  position: relative;
+  overflow: hidden;
+  background: var(--surface-3);
+  border-radius: 6px;
 }
 
-.spinner {
-  width: 20px;
-  height: 20px;
-  border: 2px solid var(--surface-3);
-  border-top-color: var(--accent);
-  border-radius: 50%;
-  animation: spin 0.7s linear infinite;
+.skeleton::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgb(148 163 184 / 16%), transparent);
+  animation: shimmer 1.3s ease-in-out infinite;
 }
 
-@keyframes spin {
+@keyframes shimmer {
   to {
-    transform: rotate(360deg);
+    transform: translateX(100%);
   }
 }
 
+.skeleton-title {
+  width: 210px;
+  max-width: 60%;
+  height: 20px;
+}
+
+/* Input- and select-shaped shells that hold a shimmering bar. */
+.control-skeleton {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 36px;
+  padding: 7px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.skeleton-text {
+  width: 55%;
+  height: 12px;
+}
+
+.control-chevron {
+  flex: none;
+  margin-left: auto;
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid var(--muted);
+}
+
+.skeleton-content {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1;
+  min-height: 160px;
+  padding: 14px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.skeleton-line {
+  flex: none;
+  height: 12px;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .spinner {
-    animation-duration: 2.4s;
+  .skeleton::after {
+    animation: none;
   }
 }
 

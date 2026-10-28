@@ -28,6 +28,9 @@ public sealed record StoreDocumentRequest(
 
 public sealed record StoreDocumentResponse(Guid Id, Guid DirectoryId, string Name, int Version, bool Created);
 
+public sealed record MoveDocumentRequest(Guid? DirectoryId, int? ExpectedVersion);
+
+
 public static class AdminEndpoints
 {
     public static RouteGroupBuilder MapAdminApi(this WebApplication app)
@@ -97,6 +100,21 @@ public static class AdminEndpoints
             var expectedVersion = request.ExpectedVersion
                 ?? (await knowledge.GetAsync(ApiCaller.Admin, id, ct)).Version;
             var result = await knowledge.StoreAsync(ApiCaller.Admin, ToStoreRequest(id, request, expectedVersion), ct);
+            return Results.Ok(ToResponse(result));
+        });
+
+        documents.MapPost("/{id:guid}/move", async (
+            Guid id,
+            MoveDocumentRequest request,
+            KnowledgeService knowledge,
+            CancellationToken ct) =>
+        {
+            if (request.DirectoryId is null || request.DirectoryId == Guid.Empty)
+            {
+                throw KnowledgeException.Validation("directoryId is required to move a document.");
+            }
+
+            var result = await knowledge.MoveAsync(ApiCaller.Admin, id, request.DirectoryId.Value, request.ExpectedVersion, ct);
             return Results.Ok(ToResponse(result));
         });
 

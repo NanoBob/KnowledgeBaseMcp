@@ -116,7 +116,7 @@ export default function App() {
     <div className="app">
       <header className="topbar">
         <div className="brand">
-          <span className="brand-mark">◆</span>
+          <span className="brand-mark" role="img" aria-label="Agent Knowledge Base" />
           <div>
             <h1>Agent Knowledge Base</h1>
             <p>Directory-scoped documents for your agents</p>

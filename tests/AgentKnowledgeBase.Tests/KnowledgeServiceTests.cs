@@ -392,4 +392,125 @@ public class KnowledgeServiceTests
         Assert.Equal("Doc", detail.Name);
         Assert.Single(await _service.ListAsync(ApiCaller.Admin, null, default));
     }
+
+    [Fact]
+    public async Task Move_ChangesDirectoryBumpsVersionAndRecordsRevision()
+    {
+        var source = await CreateDirectoryAsync("source");
+        var target = await CreateDirectoryAsync("target");
+        var caller = Caller(Rw(source), Rw(target));
+        var created = await _service.StoreAsync(caller, Create(source, "Doc", "body"), default);
+
+        var moved = await _service.MoveAsync(caller, created.Id, target, null, default);
+
+        Assert.Equal(target, moved.DirectoryId);
+        Assert.Equal("Doc", moved.Name);
+        Assert.Equal(2, moved.Version);
+        Assert.False(moved.Created);
+
+        var detail = await _service.GetAsync(caller, created.Id, default);
+        Assert.Equal(target, detail.DirectoryId);
+        Assert.Equal("body", detail.Content);
+
+        var revision = _repo.Revisions.OrderByDescending(r => r.Version).First();
+        Assert.Equal(target, revision.DirectoryId);
+        Assert.Equal(2, revision.Version);
+    }
+
+    [Fact]
+    public async Task Move_ToSameDirectory_IsANoOp()
+    {
+        var directoryId = await CreateDirectoryAsync();
+        var caller = Caller(Rw(directoryId));
+        var created = await _service.StoreAsync(caller, Create(directoryId, "Doc"), default);
+
+        var result = await _service.MoveAsync(caller, created.Id, directoryId, null, default);
+
+        Assert.Equal(1, result.Version);
+        Assert.Single(_repo.Revisions);
+    }
+
+    [Fact]
+    public async Task Move_WithoutWriteAccessToTarget_IsForbidden()
+    {
+        var source = await CreateDirectoryAsync("source");
+        var target = await CreateDirectoryAsync("target");
+        var created = await _service.StoreAsync(Caller(Rw(source)), Create(source, "Doc"), default);
+
+        var ex = await Assert.ThrowsAsync<KnowledgeException>(() =>
+            _service.MoveAsync(Caller(Rw(source), R(target)), created.Id, target, null, default));
+
+        Assert.Equal(KnowledgeErrorKind.Forbidden, ex.Kind);
+        Assert.Equal(source, _repo.Documents[created.Id].DirectoryId);
+    }
+
+    [Fact]
+    public async Task Move_WithoutWriteAccessToSource_IsForbidden()
+    {
+        var source = await CreateDirectoryAsync("source");
+        var target = await CreateDirectoryAsync("target");
+        var created = await _service.StoreAsync(Caller(Rw(source)), Create(source, "Doc"), default);
+
+        var ex = await Assert.ThrowsAsync<KnowledgeException>(() =>
+            _service.MoveAsync(Caller(R(source), Rw(target)), created.Id, target, null, default));
+
+        Assert.Equal(KnowledgeErrorKind.Forbidden, ex.Kind);
+    }
+
+    [Fact]
+    public async Task Move_IntoDirectoryThatAlreadyHasTheName_IsConflict()
+    {
+        var source = await CreateDirectoryAsync("source");
+        var target = await CreateDirectoryAsync("target");
+        var caller = Caller(Rw(source), Rw(target));
+        var created = await _service.StoreAsync(caller, Create(source, "Doc"), default);
+        await _service.StoreAsync(caller, Create(target, "doc"), default);
+
+        var ex = await Assert.ThrowsAsync<KnowledgeException>(() =>
+            _service.MoveAsync(caller, created.Id, target, null, default));
+
+        Assert.Equal(KnowledgeErrorKind.Conflict, ex.Kind);
+        Assert.Equal(source, _repo.Documents[created.Id].DirectoryId);
+    }
+
+    [Fact]
+    public async Task Move_WithStaleExpectedVersion_IsConflict()
+    {
+        var source = await CreateDirectoryAsync("source");
+        var target = await CreateDirectoryAsync("target");
+        var caller = Caller(Rw(source), Rw(target));
+        var created = await _service.StoreAsync(caller, Create(source, "Doc"), default);
+
+        var ex = await Assert.ThrowsAsync<KnowledgeException>(() =>
+            _service.MoveAsync(caller, created.Id, target, expectedVersion: 7, default));
+
+        Assert.Equal(KnowledgeErrorKind.Conflict, ex.Kind);
+        Assert.Equal(1, ex.LatestVersion);
+    }
+
+    [Fact]
+    public async Task Move_UnknownDirectory_IsNotFound()
+    {
+        var source = await CreateDirectoryAsync("source");
+        var caller = Caller(Rw(source));
+        var created = await _service.StoreAsync(caller, Create(source, "Doc"), default);
+
+        var ex = await Assert.ThrowsAsync<KnowledgeException>(() =>
+            _service.MoveAsync(caller, created.Id, Guid.NewGuid(), null, default));
+
+        Assert.Equal(KnowledgeErrorKind.NotFound, ex.Kind);
+    }
+
+    [Fact]
+    public async Task Move_OfHiddenDocument_LooksMissing()
+    {
+        var source = await CreateDirectoryAsync("source");
+        var target = await CreateDirectoryAsync("target");
+        var created = await _service.StoreAsync(Caller(Rw(source)), Create(source, "Doc"), default);
+
+        var ex = await Assert.ThrowsAsync<KnowledgeException>(() =>
+            _service.MoveAsync(Caller(Rw(target)), created.Id, target, null, default));
+
+        Assert.Equal(KnowledgeErrorKind.NotFound, ex.Kind);
+    }
 }
