@@ -2,15 +2,24 @@
 
 A shared knowledge base for AI agents. Agents store learnings as markdown documents and read them in later runs. The server speaks MCP over Streamable HTTP and stores documents in MongoDB.
 
+## Model
+
+Three entities, all identified by GUID:
+
+- **Directory** — a flat grouping of documents. Directories never nest, so a document belongs to exactly one directory.
+- **Document** — a `directoryId`, a human-readable `name` that is unique within its directory (case-insensitive), plus `summary`, `tags` and Markdown `content`.
+- **Revision** — an immutable snapshot written on every create and update.
+
 ## Tools
 
 | Tool | Purpose |
 |------|---------|
-| `list_knowledge_documents` | List documents the key can read. Optional `pathPrefix`. |
-| `get_knowledge_document` | Get one document, including markdown `content`. |
+| `list_knowledge_directories` | List the directories the key can read. |
+| `list_knowledge_documents` | List documents the key can read. Optional `directoryId`. |
+| `get_knowledge_document` | Get one document by `id`, including markdown `content`. |
 | `store_knowledge_document` | Create or update a document. Updates require `expectedVersion`. |
 
-Updates must pass the `version` you last read. A stale version returns an error with the current version, so the agent can re-read and retry. Creating a document requires `path`, `title`, and `content`. `id` defaults to a slug of the title. An update replaces `title`, `summary`, `tags`, and `content`, so omitting `summary` clears it.
+Creating a document requires `directoryId`, `name`, and `content`; the `id` is generated, so any agent with write access can add documents to its directories. Updating requires the `id` and the `version` you last read. A stale version returns an error with the current version, so the agent can re-read and retry. An update replaces `summary`, `tags`, and `content`, so omitting `summary` clears it; omitting `name` keeps the current one. A document cannot be moved to another directory.
 
 ## Run with Docker Compose
 
@@ -36,20 +45,29 @@ Data is stored in the `mongo-data` named volume. Run `docker compose down -v` to
 | `Mongo__ConnectionString` | `mongodb://mongo:27017` | MongoDB connection string. |
 | `Mongo__Database` | `agent_knowledge` | Database name. |
 
-## Managing API keys
+## Managing directories and API keys
 
-Keys are scoped to directory prefixes. Each scope is `read` or `readwrite`. The longest matching prefix decides, so a `read` scope can carve out a subdirectory of a `readwrite` scope.
+Keys are scoped to whole directories. Each scope names a `directoryId` and is either `read` or `readwrite`. A key can only read or write documents inside the directories it lists; documents elsewhere behave as if they do not exist.
+
+Create a directory:
+
+```
+curl -X POST http://localhost:8080/admin/directories \
+  -H "X-Admin-Token: $ADMIN_TOKEN" -H "Content-Type: application/json" \
+  -d '{"name":"dotnet","description":"Reusable .NET knowledge"}'
+```
 
 Create a key (the plaintext is returned once):
 
 ```
 curl -X POST http://localhost:8080/admin/api-keys \
   -H "X-Admin-Token: $ADMIN_TOKEN" -H "Content-Type: application/json" \
-  -d '{"name":"build-agent","scopes":[{"pathPrefix":"dotnet","access":"readwrite"},{"pathPrefix":"dotnet/secret","access":"read"}]}'
+  -d '{"name":"build-agent","scopes":[{"directoryId":"<directory-guid>","access":"readwrite"}]}'
 ```
 
 Other admin calls:
 
+- `GET /admin/directories` lists directories, including ones the token's keys cannot read.
 - `GET /admin/api-keys` lists keys without their secrets.
 - `DELETE /admin/api-keys/{id}` revokes a key. This takes effect on the next request.
 
@@ -76,11 +94,11 @@ Example client configuration (Streamable HTTP):
 }
 ```
 
-## Path and content rules
+## Name and content rules
 
-- Paths are lowercase segments of `a-z`, `0-9`, `.`, `_`, `-`, separated by `/`. Up to 10 segments. `..` is rejected.
-- Title up to 200 characters. Summary up to 500 characters. Content up to 100 KB.
-- Documents outside a key's scopes are invisible: they do not appear in listings, and `get` returns "not found".
+- Directory names are lowercase `a-z`, `0-9`, `.`, `_`, `-`, up to 64 characters, and unique. Directories never nest.
+- Document names are free text up to 200 characters and unique per directory, ignoring case. Summary up to 500 characters. Content up to 100 KB.
+- Documents outside a key's directories are invisible: they do not appear in listings, and `get` returns "not found".
 
 ## Development
 

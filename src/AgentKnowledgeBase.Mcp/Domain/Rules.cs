@@ -1,53 +1,89 @@
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace AgentKnowledgeBase.Mcp.Domain;
 
-/// <summary>Virtual directory paths such as <c>dotnet/efcore</c>. An empty prefix denotes the root.</summary>
-public static class PathRules
+public static class DirectoryRules
 {
-    public const int MaxDepth = 10;
-    private static readonly Regex SegmentPattern = new(@"^[a-z0-9][a-z0-9._-]{0,63}$", RegexOptions.Compiled);
+    public const int MaxNameLength = 64;
+    public const int MaxDescriptionLength = 500;
+    private static readonly Regex NamePattern = new(@"^[a-z0-9][a-z0-9._-]{0,63}$", RegexOptions.Compiled);
 
-    public static string NormalizeDocumentPath(string? path)
+    public static string NormalizeName(string? name)
     {
-        var normalized = Normalize(path);
+        var normalized = (name?.Trim().Trim('/') ?? "").ToLowerInvariant();
         if (normalized.Length == 0)
         {
-            throw KnowledgeException.Validation("path is required, e.g. 'dotnet/efcore'.");
+            throw KnowledgeException.Validation("directory name is required, e.g. 'dotnet'.");
+        }
+
+        if (!NamePattern.IsMatch(normalized))
+        {
+            throw KnowledgeException.Validation(
+                "invalid directory name. Use letters, digits, '.', '_' or '-' (max 64 characters).");
         }
 
         return normalized;
     }
 
-    public static string NormalizePrefix(string? prefix) => Normalize(prefix);
-
-    /// <summary>True when <paramref name="path"/> equals the prefix or lies beneath it, matched on whole segments.</summary>
-    public static bool IsWithin(string prefix, string path) =>
-        prefix.Length == 0 || path == prefix || path.StartsWith(prefix + "/", StringComparison.Ordinal);
-
-    private static string Normalize(string? path)
+    public static string NormalizeDescription(string? description)
     {
-        if (string.IsNullOrWhiteSpace(path))
+        var trimmed = description?.Trim() ?? "";
+        if (trimmed.Length > MaxDescriptionLength)
         {
-            return "";
+            throw KnowledgeException.Validation($"description must be at most {MaxDescriptionLength} characters.");
         }
 
-        var segments = path.Trim().Trim('/').ToLowerInvariant().Split('/');
-        if (segments.Length > MaxDepth)
+        return trimmed;
+    }
+}
+
+public static class DocumentRules
+{
+    public const int MaxNameLength = 200;
+    public const int MaxSummaryLength = 500;
+    public const int MaxContentBytes = 100 * 1024;
+
+    public static string NormalizeName(string? name)
+    {
+        var trimmed = name?.Trim() ?? "";
+        if (trimmed.Length == 0 || trimmed.Length > MaxNameLength)
         {
-            throw KnowledgeException.Validation($"path must have at most {MaxDepth} segments.");
+            throw KnowledgeException.Validation($"name is required and must be at most {MaxNameLength} characters.");
         }
 
-        foreach (var segment in segments)
+        if (trimmed.Any(char.IsControl))
         {
-            if (!SegmentPattern.IsMatch(segment))
-            {
-                throw KnowledgeException.Validation(
-                    $"invalid path segment '{segment}'. Use letters, digits, '.', '_' or '-'.");
-            }
+            throw KnowledgeException.Validation("name must not contain control characters.");
         }
 
-        return string.Join('/', segments);
+        return trimmed;
+    }
+
+    public static string NormalizeSummary(string? summary)
+    {
+        var trimmed = summary?.Trim() ?? "";
+        if (trimmed.Length > MaxSummaryLength)
+        {
+            throw KnowledgeException.Validation($"summary must be at most {MaxSummaryLength} characters.");
+        }
+
+        return trimmed;
+    }
+
+    public static string NormalizeContent(string? content)
+    {
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            throw KnowledgeException.Validation("content is required.");
+        }
+
+        if (Encoding.UTF8.GetByteCount(content) > MaxContentBytes)
+        {
+            throw KnowledgeException.Validation($"content must be at most {MaxContentBytes / 1024} KB.");
+        }
+
+        return content;
     }
 }
 
@@ -85,59 +121,25 @@ public static class TagRules
     }
 }
 
-public static class IdRules
-{
-    private static readonly Regex IdPattern = new(@"^[a-z0-9][a-z0-9-]{0,99}$", RegexOptions.Compiled);
-    private static readonly Regex NonSlugChars = new(@"[^a-z0-9]+", RegexOptions.Compiled);
-
-    public static string Validate(string id)
-    {
-        if (!IdPattern.IsMatch(id))
-        {
-            throw KnowledgeException.Validation(
-                "id must be 1-100 characters of lowercase letters, digits and '-', starting with a letter or digit.");
-        }
-
-        return id;
-    }
-
-    /// <summary>Builds a URL-safe id from a title. Returns an empty string when nothing usable remains.</summary>
-    public static string Slugify(string title)
-    {
-        var slug = NonSlugChars.Replace(title.ToLowerInvariant(), "-").Trim('-');
-        if (slug.Length > 80)
-        {
-            slug = slug[..80].TrimEnd('-');
-        }
-
-        return slug;
-    }
-}
-
 public static class AccessPolicy
 {
-    /// <summary>
-    /// The most specific matching scope (longest path prefix) decides access, so a read-only
-    /// scope can carve a protected subdirectory out of a broader read-write scope.
-    /// </summary>
-    public static AccessLevel? GetLevel(IEnumerable<KeyScope> scopes, string path)
+    /// <summary>Scopes grant access to whole directories. When several scopes match, the highest level wins.</summary>
+    public static AccessLevel? GetLevel(IEnumerable<KeyScope> scopes, Guid directoryId)
     {
-        KeyScope? best = null;
+        AccessLevel? level = null;
         foreach (var scope in scopes)
         {
-            if (!PathRules.IsWithin(scope.PathPrefix, path))
+            if (scope.DirectoryId != directoryId)
             {
                 continue;
             }
 
-            if (best is null
-                || scope.PathPrefix.Length > best.PathPrefix.Length
-                || (scope.PathPrefix.Length == best.PathPrefix.Length && scope.Access > best.Access))
+            if (level is null || scope.Access > level)
             {
-                best = scope;
+                level = scope.Access;
             }
         }
 
-        return best?.Access;
+        return level;
     }
 }

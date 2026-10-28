@@ -3,12 +3,30 @@ using MongoDB.Bson.Serialization.Attributes;
 
 namespace AgentKnowledgeBase.Mcp.Domain;
 
+/// <summary>A flat container for documents. Directories never contain other directories.</summary>
+public sealed class KnowledgeDocumentDirectory
+{
+    [BsonId]
+    [BsonRepresentation(BsonType.String)]
+    public Guid Id { get; set; }
+
+    public string Name { get; set; } = "";
+    public string Description { get; set; } = "";
+    public DateTime CreatedAt { get; set; }
+    public string CreatedBy { get; set; } = "";
+}
+
 public sealed class KnowledgeDocument
 {
     [BsonId]
-    public string Id { get; set; } = "";
-    public string Path { get; set; } = "";
-    public string Title { get; set; } = "";
+    [BsonRepresentation(BsonType.String)]
+    public Guid Id { get; set; }
+
+    [BsonRepresentation(BsonType.String)]
+    public Guid DirectoryId { get; set; }
+
+    /// <summary>Human-readable name, unique within its directory (case-insensitive).</summary>
+    public string Name { get; set; } = "";
     public string Summary { get; set; } = "";
     public List<string> Tags { get; set; } = [];
     public string Content { get; set; } = "";
@@ -19,14 +37,20 @@ public sealed class KnowledgeDocument
     public string UpdatedBy { get; set; } = "";
 }
 
-public sealed class DocumentRevision
+public sealed class KnowledgeDocumentRevision
 {
     [BsonId]
-    public string Id { get; set; } = Guid.NewGuid().ToString("N");
-    public string DocumentId { get; set; } = "";
+    [BsonRepresentation(BsonType.String)]
+    public Guid Id { get; set; } = Guid.NewGuid();
+
+    [BsonRepresentation(BsonType.String)]
+    public Guid DocumentId { get; set; }
+
+    [BsonRepresentation(BsonType.String)]
+    public Guid DirectoryId { get; set; }
+
     public int Version { get; set; }
-    public string Path { get; set; } = "";
-    public string Title { get; set; } = "";
+    public string Name { get; set; } = "";
     public string Summary { get; set; } = "";
     public List<string> Tags { get; set; } = [];
     public string Content { get; set; } = "";
@@ -42,7 +66,8 @@ public enum AccessLevel
 
 public sealed class KeyScope
 {
-    public string PathPrefix { get; set; } = "";
+    [BsonRepresentation(BsonType.String)]
+    public Guid DirectoryId { get; set; }
 
     [BsonRepresentation(BsonType.String)]
     public AccessLevel Access { get; set; }
@@ -51,7 +76,8 @@ public sealed class KeyScope
 public sealed class ApiKeyRecord
 {
     [BsonId]
-    public string Id { get; set; } = "";
+    [BsonRepresentation(BsonType.String)]
+    public Guid Id { get; set; }
     public string Name { get; set; } = "";
     public string KeyHash { get; set; } = "";
     public List<KeyScope> Scopes { get; set; } = [];
@@ -60,11 +86,11 @@ public sealed class ApiKeyRecord
 }
 
 /// <summary>An authenticated API key for the current request.</summary>
-public sealed record ApiCaller(string KeyId, string Name, IReadOnlyList<KeyScope> Scopes)
+public sealed record ApiCaller(Guid KeyId, string Name, IReadOnlyList<KeyScope> Scopes)
 {
-    public AccessLevel? AccessFor(string path) => AccessPolicy.GetLevel(Scopes, path);
+    public AccessLevel? AccessFor(Guid directoryId) => AccessPolicy.GetLevel(Scopes, directoryId);
 
-    public bool CanRead(string path) => AccessFor(path) is not null;
+    public bool CanRead(Guid directoryId) => AccessFor(directoryId) is not null;
 
-    public bool CanWrite(string path) => AccessFor(path) == AccessLevel.ReadWrite;
+    public bool CanWrite(Guid directoryId) => AccessFor(directoryId) == AccessLevel.ReadWrite;
 }

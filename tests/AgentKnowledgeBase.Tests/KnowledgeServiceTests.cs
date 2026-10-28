@@ -1,65 +1,144 @@
 using AgentKnowledgeBase.Mcp.Domain;
 using AgentKnowledgeBase.Mcp.Services;
-using AgentKnowledgeBase.Mcp.Storage;
 
 namespace AgentKnowledgeBase.Tests;
 
 public class KnowledgeServiceTests
 {
+    private readonly FakeDirectoryRepository _directoryRepo = new();
     private readonly FakeDocumentRepository _repo = new();
+    private readonly DirectoryService _directories;
     private readonly KnowledgeService _service;
 
     public KnowledgeServiceTests()
     {
-        _service = new KnowledgeService(_repo);
+        _directories = new DirectoryService(_directoryRepo);
+        _service = new KnowledgeService(_repo, _directoryRepo);
     }
 
     private static ApiCaller Caller(params KeyScope[] scopes) =>
-        new("key-1", "tester", scopes);
+        new(Guid.NewGuid(), "tester", scopes);
 
-    private static KeyScope Rw(string prefix) => new() { PathPrefix = prefix, Access = AccessLevel.ReadWrite };
+    private static KeyScope Rw(Guid directoryId) => new() { DirectoryId = directoryId, Access = AccessLevel.ReadWrite };
 
-    private static KeyScope R(string prefix) => new() { PathPrefix = prefix, Access = AccessLevel.Read };
+    private static KeyScope R(Guid directoryId) => new() { DirectoryId = directoryId, Access = AccessLevel.Read };
 
-    private static StoreRequest Create(string title, string path, string content = "body") =>
-        new(null, path, title, "summary", ["tag"], content, null);
+    private static StoreRequest Create(Guid directoryId, string name, string content = "body") =>
+        new(null, directoryId, name, "summary", ["tag"], content, null);
+
+    private async Task<Guid> CreateDirectoryAsync(string name = "team")
+    {
+        var directory = await _directories.CreateAsync(name, "", "admin", default);
+        return directory.Id;
+    }
 
     [Fact]
-    public async Task Create_DefaultsIdToSlugAndStartsAtVersionOne()
+    public async Task Create_StartsAtVersionOneAndRecordsRevision()
     {
-        var caller = Caller(Rw(""));
+        var directoryId = await CreateDirectoryAsync();
+        var caller = Caller(Rw(directoryId));
 
-        var result = await _service.StoreAsync(caller, Create("EF Core Tips", "dotnet/efcore"), default);
+        var result = await _service.StoreAsync(caller, Create(directoryId, "EF Core Tips"), default);
 
         Assert.True(result.Created);
-        Assert.Equal("ef-core-tips", result.Document.Id);
-        Assert.Equal(1, result.Document.Version);
+        Assert.NotEqual(Guid.Empty, result.Id);
+        Assert.Equal(directoryId, result.DirectoryId);
+        Assert.Equal("EF Core Tips", result.Name);
+        Assert.Equal(1, result.Version);
         Assert.Single(_repo.Revisions);
+    }
+
+    [Fact]
+    public async Task Create_SameNameInDifferentDirectories_IsAllowed()
+    {
+        var team = await CreateDirectoryAsync("team");
+        var other = await CreateDirectoryAsync("other");
+        var caller = Caller(Rw(team), Rw(other));
+
+        await _service.StoreAsync(caller, Create(team, "Notes"), default);
+        var second = await _service.StoreAsync(caller, Create(other, "Notes"), default);
+
+        Assert.True(second.Created);
+        Assert.Equal(2, _repo.Documents.Count);
+    }
+
+    [Fact]
+    public async Task Create_DuplicateNameInSameDirectory_ReturnsConflict()
+    {
+        var directoryId = await CreateDirectoryAsync();
+        var caller = Caller(Rw(directoryId));
+        await _service.StoreAsync(caller, Create(directoryId, "Notes"), default);
+
+        var ex = await Assert.ThrowsAsync<KnowledgeException>(() =>
+            _service.StoreAsync(caller, Create(directoryId, "notes"), default));
+
+        Assert.Equal(KnowledgeErrorKind.Conflict, ex.Kind);
+    }
+
+    [Fact]
+    public async Task Create_UnknownDirectory_IsNotFound()
+    {
+        var ex = await Assert.ThrowsAsync<KnowledgeException>(() =>
+            _service.StoreAsync(Caller(Rw(Guid.NewGuid())), Create(Guid.NewGuid(), "Notes"), default));
+
+        Assert.Equal(KnowledgeErrorKind.NotFound, ex.Kind);
     }
 
     [Fact]
     public async Task Update_RequiresCurrentVersionAndIncrements()
     {
-        var caller = Caller(Rw(""));
-        await _service.StoreAsync(caller, Create("Notes", "misc"), default);
+        var directoryId = await CreateDirectoryAsync();
+        var caller = Caller(Rw(directoryId));
+        var created = await _service.StoreAsync(caller, Create(directoryId, "Notes"), default);
 
         var updated = await _service.StoreAsync(caller,
-            new StoreRequest("notes", "misc", "Notes", "new", null, "changed", 1), default);
+            new StoreRequest(created.Id, null, null, "new", null, "changed", 1), default);
 
         Assert.False(updated.Created);
-        Assert.Equal(2, updated.Document.Version);
+        Assert.Equal(2, updated.Version);
+        Assert.Equal("Notes", updated.Name);
         Assert.Equal(2, _repo.Revisions.Count);
+    }
+
+    [Fact]
+    public async Task Update_CanRename()
+    {
+        var directoryId = await CreateDirectoryAsync();
+        var caller = Caller(Rw(directoryId));
+        var created = await _service.StoreAsync(caller, Create(directoryId, "Old name"), default);
+
+        var updated = await _service.StoreAsync(caller,
+            new StoreRequest(created.Id, null, "New name", null, null, "body", 1), default);
+
+        Assert.Equal("New name", updated.Name);
+        Assert.Equal("New name", _repo.Documents[created.Id].Name);
+    }
+
+    [Fact]
+    public async Task Update_RenameToExistingName_ReturnsConflict()
+    {
+        var directoryId = await CreateDirectoryAsync();
+        var caller = Caller(Rw(directoryId));
+        await _service.StoreAsync(caller, Create(directoryId, "Taken"), default);
+        var other = await _service.StoreAsync(caller, Create(directoryId, "Free"), default);
+
+        var ex = await Assert.ThrowsAsync<KnowledgeException>(() =>
+            _service.StoreAsync(caller, new StoreRequest(other.Id, null, "taken", null, null, "body", 1), default));
+
+        Assert.Equal(KnowledgeErrorKind.Conflict, ex.Kind);
+        Assert.Equal("Free", _repo.Documents[other.Id].Name);
     }
 
     [Fact]
     public async Task Update_WithStaleVersion_ReturnsConflictWithLatestVersion()
     {
-        var caller = Caller(Rw(""));
-        await _service.StoreAsync(caller, Create("Notes", "misc"), default);
-        await _service.StoreAsync(caller, new StoreRequest("notes", "misc", "Notes", null, null, "v2", 1), default);
+        var directoryId = await CreateDirectoryAsync();
+        var caller = Caller(Rw(directoryId));
+        var created = await _service.StoreAsync(caller, Create(directoryId, "Notes"), default);
+        await _service.StoreAsync(caller, new StoreRequest(created.Id, null, null, null, null, "v2", 1), default);
 
         var ex = await Assert.ThrowsAsync<KnowledgeException>(() =>
-            _service.StoreAsync(caller, new StoreRequest("notes", "misc", "Notes", null, null, "stale", 1), default));
+            _service.StoreAsync(caller, new StoreRequest(created.Id, null, null, null, null, "stale", 1), default));
 
         Assert.Equal(KnowledgeErrorKind.Conflict, ex.Kind);
         Assert.Equal(2, ex.LatestVersion);
@@ -68,34 +147,33 @@ public class KnowledgeServiceTests
     [Fact]
     public async Task Update_WithoutVersion_ReturnsConflict()
     {
-        var caller = Caller(Rw(""));
-        await _service.StoreAsync(caller, Create("Notes", "misc"), default);
+        var directoryId = await CreateDirectoryAsync();
+        var caller = Caller(Rw(directoryId));
+        var created = await _service.StoreAsync(caller, Create(directoryId, "Notes"), default);
 
         var ex = await Assert.ThrowsAsync<KnowledgeException>(() =>
-            _service.StoreAsync(caller, new StoreRequest("notes", "misc", "Notes", null, null, "x", null), default));
+            _service.StoreAsync(caller, new StoreRequest(created.Id, null, null, null, null, "x", null), default));
 
         Assert.Equal(KnowledgeErrorKind.Conflict, ex.Kind);
     }
 
     [Fact]
-    public async Task Create_WithExistingId_ReturnsConflict()
+    public async Task Update_UnknownDocument_IsNotFound()
     {
-        var caller = Caller(Rw(""));
-        await _service.StoreAsync(caller, Create("Notes", "misc"), default);
-
         var ex = await Assert.ThrowsAsync<KnowledgeException>(() =>
-            _service.StoreAsync(caller, new StoreRequest("notes", "misc", "Other", null, null, "x", null), default));
+            _service.StoreAsync(Caller(), new StoreRequest(Guid.NewGuid(), null, null, null, null, "x", 1), default));
 
-        Assert.Equal(KnowledgeErrorKind.Conflict, ex.Kind);
+        Assert.Equal(KnowledgeErrorKind.NotFound, ex.Kind);
     }
 
     [Fact]
-    public async Task Store_ToPathOutsideScope_IsForbidden()
+    public async Task Store_ToDirectoryOutsideScope_IsForbidden()
     {
-        var caller = Caller(Rw("team"));
+        var team = await CreateDirectoryAsync("team");
+        var other = await CreateDirectoryAsync("other");
 
         var ex = await Assert.ThrowsAsync<KnowledgeException>(() =>
-            _service.StoreAsync(caller, Create("X", "other"), default));
+            _service.StoreAsync(Caller(Rw(team)), Create(other, "X"), default));
 
         Assert.Equal(KnowledgeErrorKind.Forbidden, ex.Kind);
         Assert.Empty(_repo.Documents);
@@ -104,23 +182,26 @@ public class KnowledgeServiceTests
     [Fact]
     public async Task Store_WithReadOnlyAccess_IsForbidden()
     {
-        var seed = Caller(Rw(""));
-        await _service.StoreAsync(seed, Create("Doc", "team"), default);
+        var directoryId = await CreateDirectoryAsync();
+        var seed = await _service.StoreAsync(Caller(Rw(directoryId)), Create(directoryId, "Doc"), default);
 
         var ex = await Assert.ThrowsAsync<KnowledgeException>(() =>
-            _service.StoreAsync(Caller(R("team")), new StoreRequest("doc", "team", "Doc", null, null, "x", 1), default));
+            _service.StoreAsync(Caller(R(directoryId)),
+                new StoreRequest(seed.Id, null, null, null, null, "x", 1), default));
 
         Assert.Equal(KnowledgeErrorKind.Forbidden, ex.Kind);
     }
 
     [Fact]
-    public async Task Update_CannotChangePath()
+    public async Task Update_CannotMoveToAnotherDirectory()
     {
-        var caller = Caller(Rw(""));
-        await _service.StoreAsync(caller, Create("Doc", "team/a"), default);
+        var team = await CreateDirectoryAsync("team");
+        var other = await CreateDirectoryAsync("other");
+        var caller = Caller(Rw(team), Rw(other));
+        var created = await _service.StoreAsync(caller, Create(team, "Doc"), default);
 
         var ex = await Assert.ThrowsAsync<KnowledgeException>(() =>
-            _service.StoreAsync(caller, new StoreRequest("doc", "team/b", "Doc", null, null, "x", 1), default));
+            _service.StoreAsync(caller, new StoreRequest(created.Id, other, null, null, null, "x", 1), default));
 
         Assert.Equal(KnowledgeErrorKind.Validation, ex.Kind);
     }
@@ -128,10 +209,11 @@ public class KnowledgeServiceTests
     [Fact]
     public async Task Get_HiddenDocument_LooksMissing()
     {
-        await _service.StoreAsync(Caller(Rw("")), Create("Secret", "private"), default);
+        var privateId = await CreateDirectoryAsync("private");
+        var created = await _service.StoreAsync(Caller(Rw(privateId)), Create(privateId, "Secret"), default);
 
         var ex = await Assert.ThrowsAsync<KnowledgeException>(() =>
-            _service.GetAsync(Caller(Rw("public")), "secret", default));
+            _service.GetAsync(Caller(Rw(Guid.NewGuid())), created.Id, default));
 
         Assert.Equal(KnowledgeErrorKind.NotFound, ex.Kind);
     }
@@ -139,47 +221,80 @@ public class KnowledgeServiceTests
     [Fact]
     public async Task Update_OfHiddenDocument_LooksMissing()
     {
-        await _service.StoreAsync(Caller(Rw("")), Create("Secret", "private"), default);
+        var privateId = await CreateDirectoryAsync("private");
+        var created = await _service.StoreAsync(Caller(Rw(privateId)), Create(privateId, "Secret"), default);
 
         var ex = await Assert.ThrowsAsync<KnowledgeException>(() =>
-            _service.StoreAsync(Caller(Rw("public")), new StoreRequest("secret", "private", "Secret", null, null, "x", 1), default));
+            _service.StoreAsync(Caller(Rw(Guid.NewGuid())),
+                new StoreRequest(created.Id, null, null, null, null, "x", 1), default));
 
         Assert.Equal(KnowledgeErrorKind.NotFound, ex.Kind);
     }
 
     [Fact]
-    public async Task List_ReturnsOnlyReadableDocuments()
+    public async Task Get_ReturnsContentAndDirectoryName()
     {
-        var admin = Caller(Rw(""));
-        await _service.StoreAsync(admin, Create("A", "team/a"), default);
-        await _service.StoreAsync(admin, Create("B", "other/b"), default);
+        var directoryId = await CreateDirectoryAsync("team");
+        var caller = Caller(Rw(directoryId));
+        var created = await _service.StoreAsync(caller, Create(directoryId, "Doc", "hello"), default);
 
-        var visible = await _service.ListAsync(Caller(R("team")), null, default);
+        var detail = await _service.GetAsync(caller, created.Id, default);
 
-        Assert.Single(visible);
-        Assert.Equal("team/a", visible[0].Path);
+        Assert.Equal("hello", detail.Content);
+        Assert.Equal("team", detail.DirectoryName);
+        Assert.Equal(1, detail.Version);
     }
 
     [Fact]
-    public async Task List_FiltersByPathPrefix()
+    public async Task List_ReturnsOnlyReadableDocuments()
     {
-        var admin = Caller(Rw(""));
-        await _service.StoreAsync(admin, Create("A", "team/a"), default);
-        await _service.StoreAsync(admin, Create("B", "team2/b"), default);
+        var team = await CreateDirectoryAsync("team");
+        var other = await CreateDirectoryAsync("other");
+        var admin = Caller(Rw(team), Rw(other));
+        await _service.StoreAsync(admin, Create(team, "A"), default);
+        await _service.StoreAsync(admin, Create(other, "B"), default);
 
-        var result = await _service.ListAsync(admin, "team", default);
+        var visible = await _service.ListAsync(Caller(R(team)), null, default);
+
+        Assert.Single(visible);
+        Assert.Equal("A", visible[0].Name);
+        Assert.Equal("team", visible[0].DirectoryName);
+    }
+
+    [Fact]
+    public async Task List_FiltersByDirectoryId()
+    {
+        var team = await CreateDirectoryAsync("team");
+        var other = await CreateDirectoryAsync("other");
+        var admin = Caller(Rw(team), Rw(other));
+        await _service.StoreAsync(admin, Create(team, "A"), default);
+        await _service.StoreAsync(admin, Create(other, "B"), default);
+
+        var result = await _service.ListAsync(admin, other, default);
 
         Assert.Single(result);
-        Assert.Equal("team/a", result[0].Path);
+        Assert.Equal("B", result[0].Name);
     }
 
     [Fact]
     public async Task Store_RejectsOversizedContent()
     {
-        var big = new string('x', KnowledgeService.MaxContentBytes + 1);
+        var directoryId = await CreateDirectoryAsync();
+        var big = new string('x', DocumentRules.MaxContentBytes + 1);
 
         var ex = await Assert.ThrowsAsync<KnowledgeException>(() =>
-            _service.StoreAsync(Caller(Rw("")), Create("Big", "misc", big), default));
+            _service.StoreAsync(Caller(Rw(directoryId)), Create(directoryId, "Big", big), default));
+
+        Assert.Equal(KnowledgeErrorKind.Validation, ex.Kind);
+    }
+
+    [Fact]
+    public async Task Create_WithoutName_IsValidationError()
+    {
+        var directoryId = await CreateDirectoryAsync();
+
+        var ex = await Assert.ThrowsAsync<KnowledgeException>(() =>
+            _service.StoreAsync(Caller(Rw(directoryId)), Create(directoryId, " "), default));
 
         Assert.Equal(KnowledgeErrorKind.Validation, ex.Kind);
     }

@@ -1,132 +1,185 @@
-using System.Text;
 using AgentKnowledgeBase.Mcp.Domain;
 using AgentKnowledgeBase.Mcp.Storage;
 
 namespace AgentKnowledgeBase.Mcp.Services;
 
 public sealed record DocumentSummary(
-    string Id,
-    string Path,
-    string Title,
+    Guid Id,
+    Guid DirectoryId,
+    string DirectoryName,
+    string Name,
     string Summary,
     IReadOnlyList<string> Tags,
     int Version,
-    DateTime UpdatedAt)
-{
-    public static DocumentSummary From(KnowledgeDocument d) =>
-        new(d.Id, d.Path, d.Title, d.Summary, d.Tags, d.Version, d.UpdatedAt);
-}
+    DateTime UpdatedAt);
+
+public sealed record DocumentDetail(
+    Guid Id,
+    Guid DirectoryId,
+    string DirectoryName,
+    string Name,
+    string Summary,
+    IReadOnlyList<string> Tags,
+    string Content,
+    int Version,
+    DateTime CreatedAt,
+    DateTime UpdatedAt,
+    string CreatedBy,
+    string UpdatedBy);
 
 public sealed record StoreRequest(
-    string? Id,
-    string? Path,
-    string? Title,
+    Guid? Id,
+    Guid? DirectoryId,
+    string? Name,
     string? Summary,
     IEnumerable<string>? Tags,
     string? Content,
     int? ExpectedVersion);
 
-public sealed record StoreResult(KnowledgeDocument Document, bool Created);
+public sealed record StoreResult(Guid Id, Guid DirectoryId, string Name, int Version, bool Created);
 
-public sealed class KnowledgeService(IDocumentRepository documents)
+public sealed class KnowledgeService(IDocumentRepository documents, IDirectoryRepository directories)
 {
-    public const int MaxTitleLength = 200;
-    public const int MaxSummaryLength = 500;
-    public const int MaxContentBytes = 100 * 1024;
-
-    public async Task<IReadOnlyList<DocumentSummary>> ListAsync(ApiCaller caller, string? pathPrefix, CancellationToken ct)
+    public async Task<IReadOnlyList<DocumentSummary>> ListAsync(
+        ApiCaller caller,
+        Guid? directoryId,
+        CancellationToken ct)
     {
-        var prefix = PathRules.NormalizePrefix(pathPrefix);
         var all = await documents.ListSummariesAsync(ct);
+        var directoryNames = await LoadDirectoryNamesAsync(ct);
+
         return all
-            .Where(d => PathRules.IsWithin(prefix, d.Path) && caller.CanRead(d.Path))
-            .Select(DocumentSummary.From)
+            .Where(d => caller.CanRead(d.DirectoryId))
+            .Where(d => directoryId is null || d.DirectoryId == directoryId)
+            .Select(d => new DocumentSummary(
+                d.Id,
+                d.DirectoryId,
+                DirectoryName(directoryNames, d.DirectoryId),
+                d.Name,
+                d.Summary,
+                d.Tags,
+                d.Version,
+                d.UpdatedAt))
             .ToList();
     }
 
-    public async Task<KnowledgeDocument> GetAsync(ApiCaller caller, string id, CancellationToken ct)
+    public async Task<DocumentDetail> GetAsync(ApiCaller caller, Guid id, CancellationToken ct)
     {
         var document = await documents.FindAsync(id, ct);
-        // Hidden documents look identical to missing ones so callers cannot probe for them.
-        if (document is null || !caller.CanRead(document.Path))
+        // Documents in unreadable directories look identical to missing ones so callers cannot probe for them.
+        if (document is null || !caller.CanRead(document.DirectoryId))
         {
             throw KnowledgeException.NotFound($"document '{id}' was not found.");
         }
 
-        return document;
+        var directoryNames = await LoadDirectoryNamesAsync(ct);
+        return new DocumentDetail(
+            document.Id,
+            document.DirectoryId,
+            DirectoryName(directoryNames, document.DirectoryId),
+            document.Name,
+            document.Summary,
+            document.Tags,
+            document.Content,
+            document.Version,
+            document.CreatedAt,
+            document.UpdatedAt,
+            document.CreatedBy,
+            document.UpdatedBy);
     }
 
     public async Task<StoreResult> StoreAsync(ApiCaller caller, StoreRequest request, CancellationToken ct)
     {
-        var title = ValidateTitle(request.Title);
-        var summary = ValidateSummary(request.Summary);
-        var content = ValidateContent(request.Content);
-        var path = PathRules.NormalizeDocumentPath(request.Path);
+        var summary = DocumentRules.NormalizeSummary(request.Summary);
+        var content = DocumentRules.NormalizeContent(request.Content);
         var tags = TagRules.Normalize(request.Tags);
-        var id = ResolveId(request.Id, title);
 
-        if (request.ExpectedVersion is < 1)
+        return request.Id is null
+            ? await CreateAsync(caller, request, summary, tags, content, ct)
+            : await UpdateAsync(caller, request, summary, tags, content, ct);
+    }
+
+    private async Task<StoreResult> CreateAsync(
+        ApiCaller caller,
+        StoreRequest request,
+        string summary,
+        List<string> tags,
+        string content,
+        CancellationToken ct)
+    {
+        if (request.DirectoryId is null)
         {
-            throw KnowledgeException.Validation("expectedVersion must be a positive version number.");
+            throw KnowledgeException.Validation("directoryId is required when creating a document.");
         }
 
-        var existing = await documents.FindAsync(id, ct);
+        var name = DocumentRules.NormalizeName(request.Name);
+        var directory = await directories.FindAsync(request.DirectoryId.Value, ct)
+            ?? throw KnowledgeException.NotFound($"directory '{request.DirectoryId}' was not found.");
+
+        if (request.ExpectedVersion is not null)
+        {
+            throw KnowledgeException.NotFound(
+                $"document '{name}' does not exist in directory '{directory.Name}'. Omit expectedVersion to create it.");
+        }
+
+        if (!caller.CanWrite(directory.Id))
+        {
+            throw KnowledgeException.Forbidden($"this key cannot write to directory '{directory.Name}'.");
+        }
+
         var now = DateTime.UtcNow;
-
-        if (existing is null)
+        var document = new KnowledgeDocument
         {
-            if (request.ExpectedVersion is not null)
-            {
-                throw KnowledgeException.NotFound(
-                    $"document '{id}' does not exist. Omit expectedVersion to create it.");
-            }
+            Id = Guid.NewGuid(),
+            DirectoryId = directory.Id,
+            Name = name,
+            Summary = summary,
+            Tags = tags,
+            Content = content,
+            Version = 1,
+            CreatedAt = now,
+            UpdatedAt = now,
+            CreatedBy = caller.Name,
+            UpdatedBy = caller.Name
+        };
 
-            if (!caller.CanWrite(path))
-            {
-                throw KnowledgeException.Forbidden($"this key cannot write to '{path}'.");
-            }
-
-            var created = new KnowledgeDocument
-            {
-                Id = id,
-                Path = path,
-                Title = title,
-                Summary = summary,
-                Tags = tags,
-                Content = content,
-                Version = 1,
-                CreatedAt = now,
-                UpdatedAt = now,
-                CreatedBy = caller.Name,
-                UpdatedBy = caller.Name
-            };
-
-            if (!await documents.TryInsertAsync(created, ct))
-            {
-                var latest = await documents.FindAsync(id, ct);
-                throw KnowledgeException.Conflict(
-                    $"document '{id}' was created concurrently. Retry with expectedVersion={latest?.Version}.",
-                    latest?.Version);
-            }
-
-            await RecordRevisionAsync(created, ct);
-            return new StoreResult(created, Created: true);
+        if (!await documents.TryInsertAsync(document, ct))
+        {
+            throw KnowledgeException.Conflict(
+                $"a document named '{name}' already exists in directory '{directory.Name}'.");
         }
 
-        if (!caller.CanRead(existing.Path))
+        await RecordRevisionAsync(document, ct);
+        return new StoreResult(document.Id, document.DirectoryId, document.Name, document.Version, Created: true);
+    }
+
+    private async Task<StoreResult> UpdateAsync(
+        ApiCaller caller,
+        StoreRequest request,
+        string summary,
+        List<string> tags,
+        string content,
+        CancellationToken ct)
+    {
+        var id = request.Id!.Value;
+        var existing = await documents.FindAsync(id, ct);
+        if (existing is null || !caller.CanRead(existing.DirectoryId))
         {
             throw KnowledgeException.NotFound($"document '{id}' was not found.");
         }
 
-        if (!caller.CanWrite(existing.Path))
+        var directory = await directories.FindAsync(existing.DirectoryId, ct)
+            ?? throw KnowledgeException.NotFound($"directory '{existing.DirectoryId}' was not found.");
+
+        if (!caller.CanWrite(existing.DirectoryId))
         {
-            throw KnowledgeException.Forbidden($"this key cannot write to '{existing.Path}'.");
+            throw KnowledgeException.Forbidden($"this key cannot write to directory '{directory.Name}'.");
         }
 
-        if (path != existing.Path)
+        if (request.DirectoryId is not null && request.DirectoryId != existing.DirectoryId)
         {
             throw KnowledgeException.Validation(
-                $"document '{id}' lives at '{existing.Path}'. Its path cannot be changed; store a new id instead.");
+                $"document '{id}' lives in directory '{directory.Name}'. It cannot be moved to another directory.");
         }
 
         if (request.ExpectedVersion is null || request.ExpectedVersion != existing.Version)
@@ -136,11 +189,13 @@ public sealed class KnowledgeService(IDocumentRepository documents)
                 existing.Version);
         }
 
+        var name = DocumentRules.NormalizeName(request.Name ?? existing.Name);
+        var now = DateTime.UtcNow;
         var updated = new KnowledgeDocument
         {
             Id = id,
-            Path = path,
-            Title = title,
+            DirectoryId = existing.DirectoryId,
+            Name = name,
             Summary = summary,
             Tags = tags,
             Content = content,
@@ -151,25 +206,29 @@ public sealed class KnowledgeService(IDocumentRepository documents)
             UpdatedBy = caller.Name
         };
 
-        if (!await documents.TryReplaceAsync(updated, existing.Version, ct))
+        switch (await documents.TryReplaceAsync(updated, existing.Version, ct))
         {
-            var latest = await documents.FindAsync(id, ct);
-            throw KnowledgeException.Conflict(
-                $"document '{id}' changed while updating. Retry with expectedVersion={latest?.Version}.",
-                latest?.Version);
+            case ReplaceOutcome.NameConflict:
+                throw KnowledgeException.Conflict(
+                    $"a document named '{name}' already exists in directory '{directory.Name}'.");
+            case ReplaceOutcome.VersionMismatch:
+                var latest = await documents.FindAsync(id, ct);
+                throw KnowledgeException.Conflict(
+                    $"document '{id}' changed while updating. Retry with expectedVersion={latest?.Version}.",
+                    latest?.Version);
         }
 
         await RecordRevisionAsync(updated, ct);
-        return new StoreResult(updated, Created: false);
+        return new StoreResult(updated.Id, updated.DirectoryId, updated.Name, updated.Version, Created: false);
     }
 
     private async Task RecordRevisionAsync(KnowledgeDocument document, CancellationToken ct) =>
-        await documents.AddRevisionAsync(new DocumentRevision
+        await documents.AddRevisionAsync(new KnowledgeDocumentRevision
         {
             DocumentId = document.Id,
+            DirectoryId = document.DirectoryId,
             Version = document.Version,
-            Path = document.Path,
-            Title = document.Title,
+            Name = document.Name,
             Summary = document.Summary,
             Tags = document.Tags,
             Content = document.Content,
@@ -177,56 +236,12 @@ public sealed class KnowledgeService(IDocumentRepository documents)
             ChangedBy = document.UpdatedBy
         }, ct);
 
-    private static string ResolveId(string? requested, string title)
+    private async Task<Dictionary<Guid, string>> LoadDirectoryNamesAsync(CancellationToken ct)
     {
-        if (!string.IsNullOrWhiteSpace(requested))
-        {
-            return IdRules.Validate(requested.Trim());
-        }
-
-        var slug = IdRules.Slugify(title);
-        if (slug.Length == 0)
-        {
-            throw KnowledgeException.Validation("id is required when the title contains no letters or digits.");
-        }
-
-        return slug;
+        var all = await directories.ListAsync(ct);
+        return all.ToDictionary(d => d.Id, d => d.Name);
     }
 
-    private static string ValidateTitle(string? title)
-    {
-        var trimmed = title?.Trim() ?? "";
-        if (trimmed.Length == 0 || trimmed.Length > MaxTitleLength)
-        {
-            throw KnowledgeException.Validation($"title is required and must be at most {MaxTitleLength} characters.");
-        }
-
-        return trimmed;
-    }
-
-    private static string ValidateSummary(string? summary)
-    {
-        var trimmed = summary?.Trim() ?? "";
-        if (trimmed.Length > MaxSummaryLength)
-        {
-            throw KnowledgeException.Validation($"summary must be at most {MaxSummaryLength} characters.");
-        }
-
-        return trimmed;
-    }
-
-    private static string ValidateContent(string? content)
-    {
-        if (string.IsNullOrWhiteSpace(content))
-        {
-            throw KnowledgeException.Validation("content is required.");
-        }
-
-        if (Encoding.UTF8.GetByteCount(content) > MaxContentBytes)
-        {
-            throw KnowledgeException.Validation($"content must be at most {MaxContentBytes / 1024} KB.");
-        }
-
-        return content;
-    }
+    private static string DirectoryName(Dictionary<Guid, string> names, Guid directoryId) =>
+        names.TryGetValue(directoryId, out var name) ? name : "";
 }

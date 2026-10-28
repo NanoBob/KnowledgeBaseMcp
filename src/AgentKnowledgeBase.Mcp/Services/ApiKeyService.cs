@@ -5,9 +5,9 @@ using AgentKnowledgeBase.Mcp.Storage;
 
 namespace AgentKnowledgeBase.Mcp.Services;
 
-public sealed record KeyScopeInput(string? PathPrefix, string? Access);
+public sealed record KeyScopeInput(Guid? DirectoryId, string? Access);
 
-public sealed class ApiKeyService(IApiKeyRepository keys)
+public sealed class ApiKeyService(IApiKeyRepository keys, IDirectoryRepository directories)
 {
     public const string KeyPrefix = "akb_";
     public const int MaxScopes = 50;
@@ -23,12 +23,12 @@ public sealed class ApiKeyService(IApiKeyRepository keys)
             throw KnowledgeException.Validation("name is required and must be at most 100 characters.");
         }
 
-        var parsedScopes = ParseScopes(scopes);
+        var parsedScopes = await ParseScopesAsync(scopes, ct);
         var plainText = KeyPrefix + Base64UrlEncode(RandomNumberGenerator.GetBytes(32));
 
         var record = new ApiKeyRecord
         {
-            Id = Guid.NewGuid().ToString("N"),
+            Id = Guid.NewGuid(),
             Name = trimmedName,
             KeyHash = Hash(plainText),
             Scopes = parsedScopes,
@@ -41,7 +41,7 @@ public sealed class ApiKeyService(IApiKeyRepository keys)
 
     public Task<List<ApiKeyRecord>> ListAsync(CancellationToken ct) => keys.ListAsync(ct);
 
-    public async Task RevokeAsync(string id, CancellationToken ct)
+    public async Task RevokeAsync(Guid id, CancellationToken ct)
     {
         if (!await keys.TryRevokeAsync(id, DateTime.UtcNow, ct))
         {
@@ -69,23 +69,31 @@ public sealed class ApiKeyService(IApiKeyRepository keys)
     public static string Hash(string plainText) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(plainText))).ToLowerInvariant();
 
-    private static List<KeyScope> ParseScopes(IEnumerable<KeyScopeInput>? inputs)
+    private async Task<List<KeyScope>> ParseScopesAsync(IEnumerable<KeyScopeInput>? inputs, CancellationToken ct)
     {
-        var scopes = new List<KeyScope>();
+        var scopes = new Dictionary<Guid, AccessLevel>();
         foreach (var input in inputs ?? [])
         {
+            if (input.DirectoryId is null || input.DirectoryId == Guid.Empty)
+            {
+                throw KnowledgeException.Validation("each scope requires a directoryId.");
+            }
+
             if (!Enum.TryParse<AccessLevel>(input.Access, ignoreCase: true, out var access))
             {
                 throw KnowledgeException.Validation("scope access must be 'read' or 'readwrite'.");
             }
 
-            var prefix = PathRules.NormalizePrefix(input.PathPrefix);
-            if (scopes.Any(s => s.PathPrefix == prefix && s.Access == access))
+            var directoryId = input.DirectoryId.Value;
+            if (await directories.FindAsync(directoryId, ct) is null)
             {
-                continue;
+                throw KnowledgeException.NotFound($"directory '{directoryId}' was not found.");
             }
 
-            scopes.Add(new KeyScope { PathPrefix = prefix, Access = access });
+            if (!scopes.TryGetValue(directoryId, out var existing) || access > existing)
+            {
+                scopes[directoryId] = access;
+            }
         }
 
         if (scopes.Count == 0)
@@ -98,7 +106,7 @@ public sealed class ApiKeyService(IApiKeyRepository keys)
             throw KnowledgeException.Validation($"a key may have at most {MaxScopes} scopes.");
         }
 
-        return scopes;
+        return scopes.Select(s => new KeyScope { DirectoryId = s.Key, Access = s.Value }).ToList();
     }
 
     private static string Base64UrlEncode(byte[] bytes) =>

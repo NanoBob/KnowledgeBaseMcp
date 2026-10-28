@@ -3,20 +3,51 @@ using AgentKnowledgeBase.Mcp.Storage;
 
 namespace AgentKnowledgeBase.Tests;
 
+public sealed class FakeDirectoryRepository : IDirectoryRepository
+{
+    public Dictionary<Guid, KnowledgeDocumentDirectory> Directories { get; } = new();
+
+    public Task<List<KnowledgeDocumentDirectory>> ListAsync(CancellationToken ct) =>
+        Task.FromResult(Directories.Values.Select(Clone).ToList());
+
+    public Task<KnowledgeDocumentDirectory?> FindAsync(Guid id, CancellationToken ct) =>
+        Task.FromResult(Directories.TryGetValue(id, out var d) ? Clone(d) : null);
+
+    public Task<bool> TryInsertAsync(KnowledgeDocumentDirectory directory, CancellationToken ct)
+    {
+        if (Directories.Values.Any(d => string.Equals(d.Name, directory.Name, StringComparison.OrdinalIgnoreCase)))
+        {
+            return Task.FromResult(false);
+        }
+
+        Directories[directory.Id] = Clone(directory);
+        return Task.FromResult(true);
+    }
+
+    private static KnowledgeDocumentDirectory Clone(KnowledgeDocumentDirectory d) => new()
+    {
+        Id = d.Id,
+        Name = d.Name,
+        Description = d.Description,
+        CreatedAt = d.CreatedAt,
+        CreatedBy = d.CreatedBy
+    };
+}
+
 public sealed class FakeDocumentRepository : IDocumentRepository
 {
-    public Dictionary<string, KnowledgeDocument> Documents { get; } = new();
-    public List<DocumentRevision> Revisions { get; } = [];
+    public Dictionary<Guid, KnowledgeDocument> Documents { get; } = new();
+    public List<KnowledgeDocumentRevision> Revisions { get; } = [];
 
     public Task<List<KnowledgeDocument>> ListSummariesAsync(CancellationToken ct) =>
         Task.FromResult(Documents.Values.Select(Clone).ToList());
 
-    public Task<KnowledgeDocument?> FindAsync(string id, CancellationToken ct) =>
+    public Task<KnowledgeDocument?> FindAsync(Guid id, CancellationToken ct) =>
         Task.FromResult(Documents.TryGetValue(id, out var d) ? Clone(d) : null);
 
     public Task<bool> TryInsertAsync(KnowledgeDocument document, CancellationToken ct)
     {
-        if (Documents.ContainsKey(document.Id))
+        if (Documents.ContainsKey(document.Id) || HasName(document.DirectoryId, document.Name, null))
         {
             return Task.FromResult(false);
         }
@@ -25,28 +56,39 @@ public sealed class FakeDocumentRepository : IDocumentRepository
         return Task.FromResult(true);
     }
 
-    public Task<bool> TryReplaceAsync(KnowledgeDocument document, int expectedVersion, CancellationToken ct)
+    public Task<ReplaceOutcome> TryReplaceAsync(KnowledgeDocument document, int expectedVersion, CancellationToken ct)
     {
         if (!Documents.TryGetValue(document.Id, out var stored) || stored.Version != expectedVersion)
         {
-            return Task.FromResult(false);
+            return Task.FromResult(ReplaceOutcome.VersionMismatch);
+        }
+
+        if (HasName(document.DirectoryId, document.Name, document.Id))
+        {
+            return Task.FromResult(ReplaceOutcome.NameConflict);
         }
 
         Documents[document.Id] = Clone(document);
-        return Task.FromResult(true);
+        return Task.FromResult(ReplaceOutcome.Replaced);
     }
 
-    public Task AddRevisionAsync(DocumentRevision revision, CancellationToken ct)
+    public Task AddRevisionAsync(KnowledgeDocumentRevision revision, CancellationToken ct)
     {
         Revisions.Add(revision);
         return Task.CompletedTask;
     }
 
+    private bool HasName(Guid directoryId, string name, Guid? exceptId) =>
+        Documents.Values.Any(d =>
+            d.DirectoryId == directoryId
+            && d.Id != exceptId
+            && string.Equals(d.Name, name, StringComparison.OrdinalIgnoreCase));
+
     private static KnowledgeDocument Clone(KnowledgeDocument d) => new()
     {
         Id = d.Id,
-        Path = d.Path,
-        Title = d.Title,
+        DirectoryId = d.DirectoryId,
+        Name = d.Name,
         Summary = d.Summary,
         Tags = [.. d.Tags],
         Content = d.Content,
@@ -73,7 +115,7 @@ public sealed class FakeApiKeyRepository : IApiKeyRepository
 
     public Task<List<ApiKeyRecord>> ListAsync(CancellationToken ct) => Task.FromResult(Keys.ToList());
 
-    public Task<bool> TryRevokeAsync(string id, DateTime revokedAt, CancellationToken ct)
+    public Task<bool> TryRevokeAsync(Guid id, DateTime revokedAt, CancellationToken ct)
     {
         var key = Keys.FirstOrDefault(k => k.Id == id && k.RevokedAt is null);
         if (key is null)

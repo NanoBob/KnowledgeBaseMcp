@@ -24,8 +24,10 @@ builder.Services.AddSingleton<IMongoClient>(sp =>
 builder.Services.AddSingleton<IMongoDatabase>(sp =>
     sp.GetRequiredService<IMongoClient>().GetDatabase(sp.GetRequiredService<IOptions<MongoOptions>>().Value.Database));
 
+builder.Services.AddSingleton<IDirectoryRepository, MongoDirectoryRepository>();
 builder.Services.AddSingleton<IDocumentRepository, MongoDocumentRepository>();
 builder.Services.AddSingleton<IApiKeyRepository, MongoApiKeyRepository>();
+builder.Services.AddSingleton<DirectoryService>();
 builder.Services.AddSingleton<KnowledgeService>();
 builder.Services.AddSingleton<ApiKeyService>();
 builder.Services.AddHostedService<MongoIndexInitializer>();
