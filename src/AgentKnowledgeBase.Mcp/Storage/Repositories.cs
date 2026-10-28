@@ -7,6 +7,9 @@ public interface IDirectoryRepository
 {
     Task<List<KnowledgeDocumentDirectory>> ListAsync(CancellationToken ct);
 
+    /// <summary>Looks up only the requested directories, so callers never read the whole collection.</summary>
+    Task<List<KnowledgeDocumentDirectory>> ListByIdsAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct);
+
     Task<KnowledgeDocumentDirectory?> FindAsync(Guid id, CancellationToken ct);
 
     /// <summary>Inserts a new directory. Returns false when the name is already taken.</summary>
@@ -32,7 +35,14 @@ public enum ReplaceOutcome
 
 public interface IDocumentRepository
 {
-    Task<List<KnowledgeDocument>> ListSummariesAsync(CancellationToken ct);
+    /// <summary>
+    /// Document metadata without the content. <paramref name="directoryIds"/> narrows the query to those
+    /// directories server-side; pass null for every directory.
+    /// </summary>
+    Task<List<KnowledgeDocument>> ListSummariesAsync(
+        IReadOnlyCollection<Guid>? directoryIds,
+        Guid? directoryId,
+        CancellationToken ct);
 
     Task<KnowledgeDocument?> FindAsync(Guid id, CancellationToken ct);
 
@@ -90,8 +100,15 @@ public sealed class MongoDirectoryRepository(IMongoDatabase database) : IDirecto
             .SortBy(d => d.Name)
             .ToListAsync(ct);
 
-    public Task<KnowledgeDocumentDirectory?> FindAsync(Guid id, CancellationToken ct) =>
-        _directories.Find(d => d.Id == id).FirstOrDefaultAsync(ct)!;
+    public Task<List<KnowledgeDocumentDirectory>> ListByIdsAsync(
+        IReadOnlyCollection<Guid> ids,
+        CancellationToken ct) =>
+        ids.Count == 0
+            ? Task.FromResult(new List<KnowledgeDocumentDirectory>())
+            : _directories.Find(Builders<KnowledgeDocumentDirectory>.Filter.In(d => d.Id, ids)).ToListAsync(ct);
+
+    public async Task<KnowledgeDocumentDirectory?> FindAsync(Guid id, CancellationToken ct) =>
+        await _directories.Find(d => d.Id == id).FirstOrDefaultAsync(ct);
 
     public async Task<bool> TryInsertAsync(KnowledgeDocumentDirectory directory, CancellationToken ct)
     {
@@ -143,14 +160,28 @@ public sealed class MongoDocumentRepository(IMongoDatabase database) : IDocument
     private readonly IMongoCollection<KnowledgeDocumentRevision> _revisions =
         database.GetCollection<KnowledgeDocumentRevision>("knowledge_document_revisions");
 
-    public Task<List<KnowledgeDocument>> ListSummariesAsync(CancellationToken ct) =>
-        _documents.Find(FilterDefinition<KnowledgeDocument>.Empty)
+    public Task<List<KnowledgeDocument>> ListSummariesAsync(
+        IReadOnlyCollection<Guid>? directoryIds,
+        Guid? directoryId,
+        CancellationToken ct)
+    {
+        var filter = directoryIds is null
+            ? FilterDefinition<KnowledgeDocument>.Empty
+            : Builders<KnowledgeDocument>.Filter.In(d => d.DirectoryId, directoryIds);
+
+        if (directoryId is not null)
+        {
+            filter &= Builders<KnowledgeDocument>.Filter.Eq(d => d.DirectoryId, directoryId.Value);
+        }
+
+        return _documents.Find(filter)
             .Project<KnowledgeDocument>(Builders<KnowledgeDocument>.Projection.Exclude(d => d.Content))
             .SortBy(d => d.DirectoryId).ThenBy(d => d.Name)
             .ToListAsync(ct);
+    }
 
-    public Task<KnowledgeDocument?> FindAsync(Guid id, CancellationToken ct) =>
-        _documents.Find(d => d.Id == id).FirstOrDefaultAsync(ct)!;
+    public async Task<KnowledgeDocument?> FindAsync(Guid id, CancellationToken ct) =>
+        await _documents.Find(d => d.Id == id).FirstOrDefaultAsync(ct);
 
     public async Task<bool> TryInsertAsync(KnowledgeDocument document, CancellationToken ct)
     {
@@ -197,8 +228,8 @@ public sealed class MongoDocumentRepository(IMongoDatabase database) : IDocument
             .SortByDescending(r => r.Version)
             .ToListAsync(ct);
 
-    public Task<KnowledgeDocumentRevision?> FindRevisionAsync(Guid revisionId, CancellationToken ct) =>
-        _revisions.Find(r => r.Id == revisionId).FirstOrDefaultAsync(ct)!;
+    public async Task<KnowledgeDocumentRevision?> FindRevisionAsync(Guid revisionId, CancellationToken ct) =>
+        await _revisions.Find(r => r.Id == revisionId).FirstOrDefaultAsync(ct);
 
     public Task DeleteRevisionsAsync(Guid documentId, CancellationToken ct) =>
         _revisions.DeleteManyAsync(r => r.DocumentId == documentId, ct);
@@ -232,8 +263,8 @@ public sealed class MongoApiKeyRepository(IMongoDatabase database) : IApiKeyRepo
     public Task InsertAsync(ApiKeyRecord record, CancellationToken ct) =>
         _keys.InsertOneAsync(record, cancellationToken: ct);
 
-    public Task<ApiKeyRecord?> FindByHashAsync(string keyHash, CancellationToken ct) =>
-        _keys.Find(k => k.KeyHash == keyHash).FirstOrDefaultAsync(ct)!;
+    public async Task<ApiKeyRecord?> FindByHashAsync(string keyHash, CancellationToken ct) =>
+        await _keys.Find(k => k.KeyHash == keyHash).FirstOrDefaultAsync(ct);
 
     public Task<List<ApiKeyRecord>> ListAsync(CancellationToken ct) =>
         _keys.Find(FilterDefinition<ApiKeyRecord>.Empty).SortBy(k => k.CreatedAt).ToListAsync(ct);
@@ -246,22 +277,22 @@ public sealed class MongoApiKeyRepository(IMongoDatabase database) : IApiKeyRepo
         return result.ModifiedCount == 1;
     }
 
-    public Task<ApiKeyRecord?> TryRotateAsync(Guid id, string newKeyHash, DateTime rotatedAt, CancellationToken ct)
+    public async Task<ApiKeyRecord?> TryRotateAsync(Guid id, string newKeyHash, DateTime rotatedAt, CancellationToken ct)
     {
         var filter = Builders<ApiKeyRecord>.Filter.Where(k => k.Id == id && k.RevokedAt == null);
         var update = Builders<ApiKeyRecord>.Update
             .Set(k => k.KeyHash, newKeyHash)
             .Set(k => k.RotatedAt, rotatedAt);
         var options = new FindOneAndUpdateOptions<ApiKeyRecord> { ReturnDocument = ReturnDocument.After };
-        return _keys.FindOneAndUpdateAsync(filter, update, options, ct)!;
+        return await _keys.FindOneAndUpdateAsync(filter, update, options, ct);
     }
 
-    public Task<ApiKeyRecord?> TryUpdateScopesAsync(Guid id, List<KeyScope> scopes, CancellationToken ct)
+    public async Task<ApiKeyRecord?> TryUpdateScopesAsync(Guid id, List<KeyScope> scopes, CancellationToken ct)
     {
         var filter = Builders<ApiKeyRecord>.Filter.Where(k => k.Id == id && k.RevokedAt == null);
         var update = Builders<ApiKeyRecord>.Update.Set(k => k.Scopes, scopes);
         var options = new FindOneAndUpdateOptions<ApiKeyRecord> { ReturnDocument = ReturnDocument.After };
-        return _keys.FindOneAndUpdateAsync(filter, update, options, ct)!;
+        return await _keys.FindOneAndUpdateAsync(filter, update, options, ct);
     }
 
     public static async Task EnsureIndexesAsync(IMongoDatabase database, CancellationToken ct)

@@ -65,12 +65,18 @@ public sealed class KnowledgeService(IDocumentRepository documents, IDirectoryRe
         Guid? directoryId,
         CancellationToken ct)
     {
-        var all = await documents.ListSummariesAsync(ct);
-        var directoryNames = await LoadDirectoryNamesAsync(ct);
+        var readable = caller.ReadableDirectoryIds;
+        if (readable is { Count: 0 })
+        {
+            return [];
+        }
 
-        return all
-            .Where(d => caller.CanRead(d.DirectoryId))
-            .Where(d => directoryId is null || d.DirectoryId == directoryId)
+        var documentsPage = await documents.ListSummariesAsync(readable, directoryId, ct);
+        var directoryNames = await LoadDirectoryNamesAsync(
+            documentsPage.Select(d => d.DirectoryId).Distinct().ToList(),
+            ct);
+
+        return documentsPage
             .Select(d => new DocumentSummary(
                 d.Id,
                 d.DirectoryId,
@@ -92,11 +98,11 @@ public sealed class KnowledgeService(IDocumentRepository documents, IDirectoryRe
             throw KnowledgeException.NotFound($"document '{id}' was not found.");
         }
 
-        var directoryNames = await LoadDirectoryNamesAsync(ct);
+        var directory = await directories.FindAsync(document.DirectoryId, ct);
         return new DocumentDetail(
             document.Id,
             document.DirectoryId,
-            DirectoryName(directoryNames, document.DirectoryId),
+            directory?.Name ?? "",
             document.Name,
             document.Summary,
             document.Tags,
@@ -148,7 +154,15 @@ public sealed class KnowledgeService(IDocumentRepository documents, IDirectoryRe
     public async Task<RevisionDetail> GetRevisionAsync(ApiCaller caller, Guid revisionId, CancellationToken ct)
     {
         var revision = await documents.FindRevisionAsync(revisionId, ct);
-        if (revision is null || !caller.CanRead(revision.DirectoryId))
+        if (revision is null)
+        {
+            throw KnowledgeException.NotFound($"revision '{revisionId}' was not found.");
+        }
+
+        // A revision keeps the directory it was written in, but access follows the document's current
+        // directory so moving a document can neither expose nor hide its history.
+        var document = await documents.FindAsync(revision.DocumentId, ct);
+        if (document is null || !caller.CanRead(document.DirectoryId))
         {
             throw KnowledgeException.NotFound($"revision '{revisionId}' was not found.");
         }
@@ -386,10 +400,12 @@ public sealed class KnowledgeService(IDocumentRepository documents, IDirectoryRe
             ChangedBy = document.UpdatedBy
         }, ct);
 
-    private async Task<Dictionary<Guid, string>> LoadDirectoryNamesAsync(CancellationToken ct)
+    private async Task<Dictionary<Guid, string>> LoadDirectoryNamesAsync(
+        IReadOnlyCollection<Guid> ids,
+        CancellationToken ct)
     {
-        var all = await directories.ListAsync(ct);
-        return all.ToDictionary(d => d.Id, d => d.Name);
+        var found = await directories.ListByIdsAsync(ids, ct);
+        return found.ToDictionary(d => d.Id, d => d.Name);
     }
 
     private static string DirectoryName(Dictionary<Guid, string> names, Guid directoryId) =>

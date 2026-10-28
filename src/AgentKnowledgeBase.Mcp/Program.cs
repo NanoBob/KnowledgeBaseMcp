@@ -88,3 +88,6 @@ app.MapMcp("/mcp");
 app.MapAdminApi();
 
 app.Run();
+
+/// <summary>Exposed so integration tests can boot the real pipeline with <c>WebApplicationFactory</c>.</summary>
+public partial class Program;

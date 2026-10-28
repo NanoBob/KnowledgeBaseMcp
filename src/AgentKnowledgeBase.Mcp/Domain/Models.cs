@@ -95,6 +95,13 @@ public sealed record ApiCaller(Guid KeyId, string Name, IReadOnlyList<KeyScope> 
     public AccessLevel? AccessFor(Guid directoryId) =>
         IsAdmin ? AccessLevel.ReadWrite : AccessPolicy.GetLevel(Scopes, directoryId);
 
+    /// <summary>
+    /// Directories this caller can read, for pushing the access check into the query.
+    /// Null means "every directory" (the admin caller).
+    /// </summary>
+    public IReadOnlyCollection<Guid>? ReadableDirectoryIds =>
+        IsAdmin ? null : Scopes.Select(scope => scope.DirectoryId).Distinct().ToList();
+
     public bool CanRead(Guid directoryId) => AccessFor(directoryId) is not null;
 
     public bool CanWrite(Guid directoryId) => AccessFor(directoryId) == AccessLevel.ReadWrite;

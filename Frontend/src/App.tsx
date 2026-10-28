@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { ApiError, api, describeError, getAdminToken, setAdminToken } from './api'
-import type { Directory, DocumentSummary } from './types'
+import type { Directory, DocumentSummary, PendingKeySecret } from './types'
 import { ApiKeysPanel } from './components/ApiKeysPanel'
 import { DirectoriesPanel } from './components/DirectoriesPanel'
 import { DocumentsPanel } from './components/DocumentsPanel'
@@ -24,6 +24,7 @@ export default function App() {
   const [documents, setDocuments] = useState<DocumentSummary[]>([])
   const [loading, setLoading] = useState(false)
   const [toasts, setToasts] = useState<ToastItem[]>([])
+  const [pendingSecret, setPendingSecret] = useState<PendingKeySecret | null>(null)
   const [unauthorized, setUnauthorized] = useState(false)
   const nextToastId = useRef(0)
   const scheduledToasts = useRef(new Set<number>())
@@ -108,6 +109,7 @@ export default function App() {
     setToken('')
     setDirectories([])
     setDocuments([])
+    setPendingSecret(null)
     setToasts([])
     scheduledToasts.current.clear()
   }
@@ -191,7 +193,14 @@ export default function App() {
             onChanged={reload}
           />
         ) : null}
-        {tab === 'keys' ? <ApiKeysPanel directories={directories} notifier={notifier} /> : null}
+        {tab === 'keys' ? (
+          <ApiKeysPanel
+            directories={directories}
+            notifier={notifier}
+            secret={pendingSecret}
+            onSecretChange={setPendingSecret}
+          />
+        ) : null}
       </main>
 
       <ToastStack toasts={toasts} onDismiss={dismissToast} />

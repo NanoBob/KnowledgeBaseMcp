@@ -48,7 +48,7 @@ export interface RevisionDetail extends RevisionSummary {
 }
 
 export interface KeyScope {
-  directoryId: string | null
+  directoryId: string
   access: string
 }
 
@@ -61,6 +61,18 @@ export interface ApiKeySummary {
   revokedAt: string | null
 }
 
-export interface ApiKeyCreated extends ApiKeySummary {
+/** The plaintext key is only ever returned once, so it lives in App state and survives tab switches. */
+export interface PendingKeySecret {
+  name: string
   key: string
+  action: 'created' | 'regenerated'
+}
+
+/** The create/regenerate responses carry the one-time secret and no rotation or revocation state. */
+export interface ApiKeyCreated {
+  id: string
+  name: string
+  key: string
+  scopes: KeyScope[]
+  createdAt: string
 }

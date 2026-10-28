@@ -10,11 +10,14 @@ public sealed record CreateApiKeyRequest(string? Name, List<CreateKeyScope>? Sco
 
 public sealed record CreateKeyScope(Guid? DirectoryId, string? Access);
 
+/// <summary>A stored scope. Unlike the request shape, both fields are always present.</summary>
+public sealed record KeyScopeResponse(Guid DirectoryId, string Access);
+
 public sealed record UpdateApiKeyScopesRequest(List<CreateKeyScope>? Scopes);
 
-public sealed record ApiKeyCreatedResponse(Guid Id, string Name, string Key, IReadOnlyList<CreateKeyScope> Scopes, DateTime CreatedAt);
+public sealed record ApiKeyCreatedResponse(Guid Id, string Name, string Key, IReadOnlyList<KeyScopeResponse> Scopes, DateTime CreatedAt);
 
-public sealed record ApiKeySummaryResponse(Guid Id, string Name, IReadOnlyList<CreateKeyScope> Scopes, DateTime CreatedAt, DateTime? RotatedAt, DateTime? RevokedAt);
+public sealed record ApiKeySummaryResponse(Guid Id, string Name, IReadOnlyList<KeyScopeResponse> Scopes, DateTime CreatedAt, DateTime? RotatedAt, DateTime? RevokedAt);
 
 public sealed record CreateDirectoryRequest(string? Name, string? Description);
 
@@ -88,7 +91,12 @@ public static class AdminEndpoints
 
         documents.MapPost("/", async (StoreDocumentRequest request, KnowledgeService knowledge, CancellationToken ct) =>
         {
-            var result = await knowledge.StoreAsync(ApiCaller.Admin, ToStoreRequest(null, request), ct);
+            // expectedVersion must reach the service: sending one on create means "this should already
+            // exist", which the service rejects instead of silently creating a second document.
+            var result = await knowledge.StoreAsync(
+                ApiCaller.Admin,
+                ToStoreRequest(null, request, request.ExpectedVersion),
+                ct);
             return Results.Created($"/admin/documents/{result.Id}", ToResponse(result));
         });
 
@@ -177,7 +185,7 @@ public static class AdminEndpoints
         return group;
     }
 
-    private static StoreRequest ToStoreRequest(Guid? id, StoreDocumentRequest request, int? expectedVersion = null) =>
+    private static StoreRequest ToStoreRequest(Guid? id, StoreDocumentRequest request, int? expectedVersion) =>
         new(id, request.DirectoryId, request.Name, request.Summary, request.Tags, request.Content, expectedVersion);
 
     private static StoreDocumentResponse ToResponse(StoreResult result) =>
@@ -193,7 +201,7 @@ public static class AdminEndpoints
                     : Results.Json(new { error = "admin_token_required" }, statusCode: StatusCodes.Status401Unauthorized);
             });
 
-    private static CreateKeyScope ToDto(KeyScope scope) =>
+    private static KeyScopeResponse ToDto(KeyScope scope) =>
         new(scope.DirectoryId, scope.Access.ToString().ToLowerInvariant());
 
     private static ApiKeyCreatedResponse ToCreatedResponse(ApiKeyRecord record, string plainText) =>

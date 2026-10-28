@@ -21,6 +21,24 @@ const NO_SELECTION: Selection = { kind: 'none' }
 const PREVIEW_KEY = 'akb.editorPreview'
 const COLLAPSED_KEY = 'akb.collapsedDirectories'
 
+// localStorage throws in private modes and when storage is full, and a preference is not worth
+// breaking the editor over.
+function readFlag(key: string): boolean {
+  try {
+    return window.localStorage.getItem(key) === '1'
+  } catch {
+    return false
+  }
+}
+
+function writeStored(key: string, value: string): void {
+  try {
+    window.localStorage.setItem(key, value)
+  } catch {
+    // Preferences are best-effort.
+  }
+}
+
 function emptyDraft(directoryId: string): Draft {
   return { directoryId, name: '', summary: '', tags: '', content: '' }
 }
@@ -121,7 +139,7 @@ export function DocumentsPanel({ directories, documents, notifier, onChanged }: 
   const [loadedId, setLoadedId] = useState<string | null>(null)
   const [failedId, setFailedId] = useState<string | null>(null)
   const [attempt, setAttempt] = useState(0)
-  const [showPreview, setShowPreview] = useState(() => window.localStorage.getItem(PREVIEW_KEY) === '1')
+  const [showPreview, setShowPreview] = useState(() => readFlag(PREVIEW_KEY))
   const [collapsed, setCollapsed] = useState<string[]>(() => {
     try {
       const stored: unknown = JSON.parse(window.localStorage.getItem(COLLAPSED_KEY) ?? '[]')
@@ -133,11 +151,11 @@ export function DocumentsPanel({ directories, documents, notifier, onChanged }: 
   const [moveTarget, setMoveTarget] = useState<string | null>(null)
 
   useEffect(() => {
-    window.localStorage.setItem(PREVIEW_KEY, showPreview ? '1' : '0')
+    writeStored(PREVIEW_KEY, showPreview ? '1' : '0')
   }, [showPreview])
 
   useEffect(() => {
-    window.localStorage.setItem(COLLAPSED_KEY, JSON.stringify(collapsed))
+    writeStored(COLLAPSED_KEY, JSON.stringify(collapsed))
   }, [collapsed])
 
   const selectedId = selection.kind === 'document' ? selection.id : null

@@ -106,10 +106,7 @@ public sealed class ApiKeyService(IApiKeyRepository keys, IDirectoryRepository d
                 throw KnowledgeException.Validation("each scope requires a directoryId.");
             }
 
-            if (!Enum.TryParse<AccessLevel>(input.Access, ignoreCase: true, out var access))
-            {
-                throw KnowledgeException.Validation("scope access must be 'read' or 'readwrite'.");
-            }
+            var access = ParseAccess(input.Access);
 
             var directoryId = input.DirectoryId.Value;
             if (await directories.FindAsync(directoryId, ct) is null)
@@ -134,6 +131,27 @@ public sealed class ApiKeyService(IApiKeyRepository keys, IDirectoryRepository d
         }
 
         return scopes.Select(s => new KeyScope { DirectoryId = s.Key, Access = s.Value }).ToList();
+    }
+
+    /// <summary>
+    /// Maps the wire value to an access level. Deliberately explicit rather than
+    /// <see cref="Enum.TryParse{TEnum}(string, bool, out TEnum)"/>, which also accepts numbers
+    /// ("1" would silently become ReadWrite) and comma-separated flag combinations.
+    /// </summary>
+    private static AccessLevel ParseAccess(string? access)
+    {
+        var trimmed = access?.Trim();
+        if (string.Equals(trimmed, "read", StringComparison.OrdinalIgnoreCase))
+        {
+            return AccessLevel.Read;
+        }
+
+        if (string.Equals(trimmed, "readwrite", StringComparison.OrdinalIgnoreCase))
+        {
+            return AccessLevel.ReadWrite;
+        }
+
+        throw KnowledgeException.Validation("scope access must be 'read' or 'readwrite'.");
     }
 
     private static string Base64UrlEncode(byte[] bytes) =>

@@ -16,7 +16,7 @@ public sealed class KnowledgeTools
         DirectoryService directories,
         CallerContext callerContext,
         CancellationToken cancellationToken = default) =>
-        Run(() => directories.ListAsync(callerContext.Required, cancellationToken));
+        RunAsync(() => directories.ListAsync(callerContext.Required, cancellationToken));
 
     [McpServerTool(Name = "list_knowledge_documents", ReadOnly = true)]
     [Description("List knowledge documents you can read, returning id, directoryId, directoryName, name, summary, tags and version. Use directoryId to narrow to one directory.")]
@@ -25,7 +25,7 @@ public sealed class KnowledgeTools
         CallerContext callerContext,
         [Description("Optional directory id, as returned by list_knowledge_directories.")] Guid? directoryId = null,
         CancellationToken cancellationToken = default) =>
-        Run(() => knowledge.ListAsync(callerContext.Required, directoryId, cancellationToken));
+        RunAsync(() => knowledge.ListAsync(callerContext.Required, directoryId, cancellationToken));
 
     [McpServerTool(Name = "get_knowledge_document", ReadOnly = true)]
     [Description("Get the full content and metadata of one knowledge document by id, including its current version to use as expectedVersion when updating.")]
@@ -34,7 +34,7 @@ public sealed class KnowledgeTools
         CallerContext callerContext,
         [Description("The document id, as returned by list_knowledge_documents.")] Guid id,
         CancellationToken cancellationToken = default) =>
-        Run(() => knowledge.GetAsync(callerContext.Required, id, cancellationToken));
+        RunAsync(() => knowledge.GetAsync(callerContext.Required, id, cancellationToken));
 
     [McpServerTool(Name = "store_knowledge_document")]
     [Description(
@@ -52,7 +52,7 @@ public sealed class KnowledgeTools
         [Description("Document id when updating an existing document.")] Guid? id = null,
         [Description("Required when updating an existing document: the version you last read.")] int? expectedVersion = null,
         CancellationToken cancellationToken = default) =>
-        Run(async () =>
+        RunAsync(async () =>
         {
             var result = await knowledge.StoreAsync(
                 callerContext.Required,
@@ -66,7 +66,7 @@ public sealed class KnowledgeTools
                 result.Version);
         });
 
-    private static async Task<T> Run<T>(Func<Task<T>> action)
+    private static async Task<T> RunAsync<T>(Func<Task<T>> action)
     {
         try
         {

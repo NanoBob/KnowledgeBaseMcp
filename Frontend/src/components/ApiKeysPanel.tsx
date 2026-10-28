@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../api'
-import type { ApiKeySummary, Directory, KeyScope } from '../types'
+import type { ApiKeySummary, Directory, KeyScope, PendingKeySecret } from '../types'
 import { Empty, Field, Modal, formatDate } from './ui'
 import type { Notifier } from './ui'
 
@@ -12,6 +12,8 @@ interface ScopeRow {
 interface Props {
   directories: Directory[]
   notifier: Notifier
+  secret: PendingKeySecret | null
+  onSecretChange: (secret: PendingKeySecret | null) => void
 }
 
 function ScopeEditor({
@@ -80,14 +82,14 @@ function ScopeEditor({
   )
 }
 
-function toScopeRows(scopes: KeyScope[], fallbackDirectoryId: string): ScopeRow[] {
+function toScopeRows(scopes: KeyScope[]): ScopeRow[] {
   return scopes.map((scope) => ({
-    directoryId: scope.directoryId ?? fallbackDirectoryId,
+    directoryId: scope.directoryId,
     access: scope.access === 'readwrite' ? 'readwrite' : 'read',
   }))
 }
 
-export function ApiKeysPanel({ directories, notifier }: Props) {
+export function ApiKeysPanel({ directories, notifier, secret, onSecretChange }: Props) {
   const [keys, setKeys] = useState<ApiKeySummary[]>([])
   const [loading, setLoading] = useState(true)
   const [name, setName] = useState('')
@@ -96,9 +98,6 @@ export function ApiKeysPanel({ directories, notifier }: Props) {
   const [regeneratingId, setRegeneratingId] = useState<string | null>(null)
   const [editing, setEditing] = useState<{ key: ApiKeySummary; scopes: ScopeRow[] } | null>(null)
   const [savingScopes, setSavingScopes] = useState(false)
-  const [createdKey, setCreatedKey] = useState<{ name: string; key: string; action: 'created' | 'regenerated' } | null>(
-    null,
-  )
   const [copied, setCopied] = useState(false)
 
   const directoryNames = useMemo(
@@ -130,12 +129,31 @@ export function ApiKeysPanel({ directories, notifier }: Props) {
   }, [firstDirectoryId])
 
   function startEditScopes(key: ApiKeySummary) {
-    setEditing({ key, scopes: toScopeRows(key.scopes, firstDirectoryId) })
+    setEditing({ key, scopes: toScopeRows(key.scopes) })
   }
 
   async function saveScopes() {
     if (editing === null) return
-    const rows = editing.scopes.filter((row) => row.directoryId !== '')
+
+    // A scope can outlive its directory, and the API rejects unknown directories, which would make
+    // the whole key unsavable. Drop those rows, but only after the user agrees.
+    const known = new Set(directories.map((directory) => directory.id))
+    const rows = editing.scopes.filter((row) => row.directoryId !== '' && known.has(row.directoryId))
+    const dropped = editing.scopes.length - rows.length
+    if (dropped > 0) {
+      const names = editing.scopes
+        .filter((row) => !known.has(row.directoryId))
+        .map((row) => directoryNames.get(row.directoryId) ?? 'a deleted directory')
+      if (
+        !window.confirm(
+          `Drop ${dropped} scope${dropped === 1 ? '' : 's'} pointing at ${names.join(', ')}? ` +
+            'The key cannot keep permissions on a directory that no longer exists.',
+        )
+      ) {
+        return
+      }
+    }
+
     if (rows.length === 0) {
       notifier.error(new Error('Keep at least one directory scope.'))
       return
@@ -175,7 +193,7 @@ export function ApiKeysPanel({ directories, notifier }: Props) {
         name: name.trim(),
         scopes: rows.map((row) => ({ directoryId: row.directoryId, access: row.access })),
       })
-      setCreatedKey({ name: created.name, key: created.key, action: 'created' })
+      onSecretChange({ name: created.name, key: created.key, action: 'created' })
       setCopied(false)
       setName('')
       setScopes(firstDirectoryId !== '' ? [{ directoryId: firstDirectoryId, access: 'read' }] : [])
@@ -189,9 +207,9 @@ export function ApiKeysPanel({ directories, notifier }: Props) {
   }
 
   async function copyKey() {
-    if (createdKey === null) return
+    if (secret === null) return
     try {
-      await navigator.clipboard.writeText(createdKey.key)
+      await navigator.clipboard.writeText(secret.key)
       setCopied(true)
     } catch {
       notifier.error(new Error('Clipboard access was blocked — copy the key manually.'))
@@ -210,7 +228,7 @@ export function ApiKeysPanel({ directories, notifier }: Props) {
     setRegeneratingId(key.id)
     try {
       const rotated = await api.regenerateApiKey(key.id)
-      setCreatedKey({ name: rotated.name, key: rotated.key, action: 'regenerated' })
+      onSecretChange({ name: rotated.name, key: rotated.key, action: 'regenerated' })
       setCopied(false)
       await load()
       notifier.flash(`Regenerated "${rotated.name}".`)
@@ -265,7 +283,7 @@ export function ApiKeysPanel({ directories, notifier }: Props) {
           </div>
         </div>
 
-        {createdKey !== null && createdKey.action === 'created' ? (
+        {secret !== null && secret.action === 'created' ? (
           <div className="secret">
             <div className="secret-head">
               <strong>Copy this key now</strong>
@@ -273,21 +291,21 @@ export function ApiKeysPanel({ directories, notifier }: Props) {
                 {copied ? 'Copied' : 'Copy'}
               </button>
             </div>
-            <code className="secret-value">{createdKey.key}</code>
+            <code className="secret-value">{secret.key}</code>
             <p className="muted">It cannot be shown again. Store it in your MCP client configuration.</p>
           </div>
         ) : null}
       </div>
 
-      {createdKey !== null && createdKey.action === 'regenerated' ? (
+      {secret !== null && secret.action === 'regenerated' ? (
         <div className="card secret">
           <div className="secret-head">
-            <strong>New key for “{createdKey.name}”</strong>
+            <strong>New key for “{secret.name}”</strong>
             <button type="button" onClick={() => void copyKey()}>
               {copied ? 'Copied' : 'Copy'}
             </button>
           </div>
-          <code className="secret-value">{createdKey.key}</code>
+          <code className="secret-value">{secret.key}</code>
           <p className="muted">
             The previous key no longer works and the permissions are unchanged. This key cannot be shown again.
           </p>
@@ -320,9 +338,7 @@ export function ApiKeysPanel({ directories, notifier }: Props) {
                     ) : (
                       key.scopes.map((scope, index) => (
                         <span key={`${key.id}-${index}`} className="tag">
-                          {scope.directoryId === null
-                            ? 'all directories'
-                            : (directoryNames.get(scope.directoryId) ?? scope.directoryId)}
+                          {directoryNames.get(scope.directoryId) ?? scope.directoryId}
                           <span className={scope.access === 'readwrite' ? 'access write' : 'access'}>{scope.access}</span>
                         </span>
                       ))

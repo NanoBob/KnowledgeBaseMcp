@@ -97,6 +97,8 @@ Every call needs the admin token in an `X-Admin-Token` header (or `Authorization
 
 `PUT /admin/documents/{id}` accepts an optional `expectedVersion`. Omit it to overwrite whatever is stored, or send the version you last read to get a `409` when someone else changed the document first.
 
+`POST /admin/documents` rejects a request that carries `expectedVersion` with a `404`, because a create has no prior version to compare against. Omit it to create the document.
+
 `POST /admin/documents/{id}/move` keeps the document's name, content and revision history, so the name must be free in the target directory; it bumps the version and records a revision that carries the new `directoryId`.
 
 Errors come back as JSON with an HTTP status that matches the failure:

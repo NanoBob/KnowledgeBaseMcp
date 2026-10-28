@@ -10,6 +10,11 @@ public sealed class FakeDirectoryRepository : IDirectoryRepository
     public Task<List<KnowledgeDocumentDirectory>> ListAsync(CancellationToken ct) =>
         Task.FromResult(Directories.Values.Select(Clone).ToList());
 
+    public Task<List<KnowledgeDocumentDirectory>> ListByIdsAsync(
+        IReadOnlyCollection<Guid> ids,
+        CancellationToken ct) =>
+        Task.FromResult(Directories.Values.Where(d => ids.Contains(d.Id)).Select(Clone).ToList());
+
     public Task<KnowledgeDocumentDirectory?> FindAsync(Guid id, CancellationToken ct) =>
         Task.FromResult(Directories.TryGetValue(id, out var d) ? Clone(d) : null);
 
@@ -60,8 +65,15 @@ public sealed class FakeDocumentRepository : IDocumentRepository
     public Dictionary<Guid, KnowledgeDocument> Documents { get; } = new();
     public List<KnowledgeDocumentRevision> Revisions { get; } = [];
 
-    public Task<List<KnowledgeDocument>> ListSummariesAsync(CancellationToken ct) =>
-        Task.FromResult(Documents.Values.Select(Clone).ToList());
+    public Task<List<KnowledgeDocument>> ListSummariesAsync(
+        IReadOnlyCollection<Guid>? directoryIds,
+        Guid? directoryId,
+        CancellationToken ct) =>
+        Task.FromResult(Documents.Values
+            .Where(d => directoryIds is null || directoryIds.Contains(d.DirectoryId))
+            .Where(d => directoryId is null || d.DirectoryId == directoryId)
+            .Select(Clone)
+            .ToList());
 
     public Task<KnowledgeDocument?> FindAsync(Guid id, CancellationToken ct) =>
         Task.FromResult(Documents.TryGetValue(id, out var d) ? Clone(d) : null);

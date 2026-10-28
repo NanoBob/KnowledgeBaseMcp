@@ -5,12 +5,17 @@
   --surface-2: #1b2330;
   --surface-3: #212b39;
   --border: #2a3441;
+  --border-strong: #3b475a;
   --text: #e6edf3;
   --muted: #8b98a5;
   --accent: #4f9dff;
   --accent-strong: #2f7fe0;
+  --accent-alt: #7b5cff;
+  --on-accent: #fff;
   --danger: #f85149;
+  --danger-soft: #ffb3ae;
   --success: #3fb950;
+  --success-soft: #8fe39b;
   --radius: 10px;
   --mono: 'Cascadia Code', 'Consolas', ui-monospace, monospace;
 }
@@ -245,7 +250,7 @@ button {
 
 button:hover:not(:disabled) {
   background: var(--surface-3);
-  border-color: #3b475a;
+  border-color: var(--border-strong);
 }
 
 button:disabled {
@@ -256,7 +261,7 @@ button:disabled {
 button.primary {
   background: var(--accent-strong);
   border-color: var(--accent-strong);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 button.primary:hover:not(:disabled) {
@@ -324,8 +329,8 @@ button.icon:hover:not(:disabled) {
   width: 34px;
   height: 34px;
   border-radius: 9px;
-  background: linear-gradient(135deg, var(--accent-strong), #7b5cff);
-  color: #fff;
+  background: linear-gradient(135deg, var(--accent-strong), var(--accent-alt));
+  color: var(--on-accent);
   font-size: 16px;
 }
 
@@ -334,7 +339,7 @@ button.icon:hover:not(:disabled) {
   content: '';
   width: 23px;
   height: 23px;
-  background-color: #fff;
+  background-color: var(--on-accent);
   -webkit-mask: url('/scroll-icon.svg') center / contain no-repeat;
   mask: url('/scroll-icon.svg') center / contain no-repeat;
 }
@@ -423,13 +428,13 @@ main {
 }
 
 .toast.error {
-  border-left-color: #f85149;
-  color: #ffb3ae;
+  border-left-color: var(--danger);
+  color: var(--danger-soft);
 }
 
 .toast.success {
-  border-left-color: #3fb950;
-  color: #8fe39b;
+  border-left-color: var(--success);
+  color: var(--success-soft);
 }
 
 .toast-message {
