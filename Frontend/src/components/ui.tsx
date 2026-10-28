@@ -5,6 +5,33 @@ export interface Notifier {
   flash: (message: string) => void
 }
 
+export type ToastKind = 'error' | 'success'
+
+export interface ToastItem {
+  id: number
+  kind: ToastKind
+  message: string
+}
+
+export function ToastStack({ toasts, onDismiss }: { toasts: ToastItem[]; onDismiss: (id: number) => void }) {
+  return (
+    <div className="toast-stack">
+      {toasts.map((toast) => (
+        <div
+          key={toast.id}
+          className={`toast ${toast.kind}`}
+          role={toast.kind === 'error' ? 'alert' : 'status'}
+        >
+          <span className="toast-message">{toast.message}</span>
+          <button type="button" className="toast-close" onClick={() => onDismiss(toast.id)} aria-label="Dismiss">
+            ×
+          </button>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 export function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
   return (
     <div className="modal-backdrop" onClick={onClose} role="presentation">

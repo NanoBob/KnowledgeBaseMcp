@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { ApiError, api, describeError, getAdminToken, setAdminToken } from './api'
 import type { Directory, DocumentSummary } from './types'
 import { ApiKeysPanel } from './components/ApiKeysPanel'
 import { DirectoriesPanel } from './components/DirectoriesPanel'
 import { DocumentsPanel } from './components/DocumentsPanel'
-import type { Notifier } from './components/ui'
+import { ToastStack } from './components/ui'
+import type { Notifier, ToastItem, ToastKind } from './components/ui'
 
 type Tab = 'documents' | 'directories' | 'keys'
 
@@ -22,23 +23,41 @@ export default function App() {
   const [directories, setDirectories] = useState<Directory[]>([])
   const [documents, setDocuments] = useState<DocumentSummary[]>([])
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [notice, setNotice] = useState<string | null>(null)
+  const [toasts, setToasts] = useState<ToastItem[]>([])
   const [unauthorized, setUnauthorized] = useState(false)
+  const nextToastId = useRef(0)
+  const scheduledToasts = useRef(new Set<number>())
+
+  const dismissToast = useCallback((id: number) => {
+    scheduledToasts.current.delete(id)
+    setToasts((current) => current.filter((toast) => toast.id !== id))
+  }, [])
+
+  const pushToast = useCallback((kind: ToastKind, message: string) => {
+    nextToastId.current += 1
+    const id = nextToastId.current
+    setToasts((current) => {
+      // Repeating the same message (e.g. retrying a failing save) shouldn't pile up.
+      if (current.some((toast) => toast.kind === kind && toast.message === message)) return current
+      return [...current, { id, kind, message }].slice(-4)
+    })
+  }, [])
+
+  const clearToasts = useCallback((kind: ToastKind) => {
+    setToasts((current) => current.filter((toast) => toast.kind !== kind))
+  }, [])
 
   const notifier = useMemo<Notifier>(
     () => ({
       error: (cause: unknown) => {
         setUnauthorized(cause instanceof ApiError && cause.status === 401)
-        setError(describeError(cause))
-        setNotice(null)
+        pushToast('error', describeError(cause))
       },
       flash: (message: string) => {
-        setNotice(message)
-        setError(null)
+        pushToast('success', message)
       },
     }),
-    [],
+    [pushToast],
   )
 
   const reload = useCallback(async () => {
@@ -48,24 +67,30 @@ export default function App() {
       const [nextDirectories, nextDocuments] = await Promise.all([api.listDirectories(), api.listDocuments()])
       setDirectories(nextDirectories)
       setDocuments(nextDocuments)
-      setError(null)
       setUnauthorized(false)
+      clearToasts('error')
     } catch (cause) {
       notifier.error(cause)
     } finally {
       setLoading(false)
     }
-  }, [notifier])
+  }, [clearToasts, notifier])
 
   useEffect(() => {
     void reload()
   }, [reload, token])
 
   useEffect(() => {
-    if (notice === null) return
-    const timer = window.setTimeout(() => setNotice(null), 4000)
-    return () => window.clearTimeout(timer)
-  }, [notice])
+    const live = new Set(toasts.map((toast) => toast.id))
+    for (const id of scheduledToasts.current) {
+      if (!live.has(id)) scheduledToasts.current.delete(id)
+    }
+    for (const toast of toasts) {
+      if (scheduledToasts.current.has(toast.id)) continue
+      scheduledToasts.current.add(toast.id)
+      window.setTimeout(() => dismissToast(toast.id), toast.kind === 'error' ? 8000 : 4500)
+    }
+  }, [dismissToast, toasts])
 
   function signIn(event: FormEvent) {
     event.preventDefault()
@@ -75,7 +100,7 @@ export default function App() {
     setToken(value)
     setTokenInput('')
     setUnauthorized(false)
-    setError(null)
+    clearToasts('error')
   }
 
   function signOut() {
@@ -83,32 +108,34 @@ export default function App() {
     setToken('')
     setDirectories([])
     setDocuments([])
-    setError(null)
-    setNotice(null)
+    setToasts([])
+    scheduledToasts.current.clear()
   }
 
   if (token.length === 0 || unauthorized) {
     return (
-      <div className="gate">
-        <form className="gate-card" onSubmit={signIn}>
-          <h1>Agent Knowledge Base</h1>
-          <p className="muted">
-            Enter the admin token from the server configuration to manage directories, documents and API keys.
-          </p>
-          {error !== null ? <div className="banner error">{error}</div> : null}
-          <input
-            type="password"
-            value={tokenInput}
-            onChange={(event) => setTokenInput(event.target.value)}
-            placeholder="Admin token"
-            aria-label="Admin token"
-            autoFocus
-          />
-          <button type="submit" className="primary" disabled={tokenInput.trim().length === 0}>
-            Unlock
-          </button>
-        </form>
-      </div>
+      <>
+        <div className="gate">
+          <form className="gate-card" onSubmit={signIn}>
+            <h1>Agent Knowledge Base</h1>
+            <p className="muted">
+              Enter the admin token from the server configuration to manage directories, documents and API keys.
+            </p>
+            <input
+              type="password"
+              value={tokenInput}
+              onChange={(event) => setTokenInput(event.target.value)}
+              placeholder="Admin token"
+              aria-label="Admin token"
+              autoFocus
+            />
+            <button type="submit" className="primary" disabled={tokenInput.trim().length === 0}>
+              Unlock
+            </button>
+          </form>
+        </div>
+        <ToastStack toasts={toasts} onDismiss={dismissToast} />
+      </>
     )
   }
 
@@ -147,9 +174,6 @@ export default function App() {
         ))}
       </nav>
 
-      {error !== null ? <div className="banner error">{error}</div> : null}
-      {notice !== null ? <div className="banner success">{notice}</div> : null}
-
       <main>
         {tab === 'directories' ? (
           <DirectoriesPanel
@@ -169,6 +193,8 @@ export default function App() {
         ) : null}
         {tab === 'keys' ? <ApiKeysPanel directories={directories} notifier={notifier} /> : null}
       </main>
+
+      <ToastStack toasts={toasts} onDismiss={dismissToast} />
     </div>
   )
 }

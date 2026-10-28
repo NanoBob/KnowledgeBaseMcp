@@ -117,6 +117,8 @@ npm run dev
 
 Open `http://localhost:5173` and paste the admin token; it is kept in `localStorage` and sent as `X-Admin-Token`. The dev server proxies `/admin` and `/health` to `http://localhost:8080`, so no CORS setup is needed. Point it elsewhere with `AKB_API_URL`, or call the API directly by setting `VITE_API_BASE` in `Frontend/.env` — the server allows the origins in `Frontend:Origins` (`http://localhost:5173` and `http://localhost:4173` by default).
 
+Errors and confirmations appear as dismissible toasts stacked in the bottom-right corner, so they stay visible wherever you have scrolled and above any open dialog.
+
 Screens:
 
 - **Documents** — filter and search by directory, edit metadata and markdown content in an editor that fills the window, toggle a sanitized markdown preview sidebar next to the textarea, move a document to another directory, delete documents, and open the revision history to read any snapshot. A skeleton placeholder fills the editor while a document loads.
