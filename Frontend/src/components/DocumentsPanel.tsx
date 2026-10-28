@@ -4,6 +4,7 @@ import { ApiError, api, describeError } from '../api'
 import type { Directory, DocumentDetail, DocumentSummary, RevisionDetail, RevisionSummary } from '../types'
 import { Empty, Field, Modal, formatDate } from './ui'
 import type { Notifier } from './ui'
+import { Markdown } from './Markdown'
 
 interface Draft {
   directoryId: string
@@ -16,6 +17,8 @@ interface Draft {
 type Selection = { kind: 'none' } | { kind: 'new' } | { kind: 'document'; id: string }
 
 const NO_SELECTION: Selection = { kind: 'none' }
+
+const PREVIEW_KEY = 'akb.editorPreview'
 
 function emptyDraft(directoryId: string): Draft {
   return { directoryId, name: '', summary: '', tags: '', content: '' }
@@ -55,6 +58,11 @@ export function DocumentsPanel({ directories, documents, notifier, onChanged }: 
   const [revisionView, setRevisionView] = useState<RevisionDetail | null>(null)
   const [busy, setBusy] = useState(false)
   const [loadingDetail, setLoadingDetail] = useState(false)
+  const [showPreview, setShowPreview] = useState(() => window.localStorage.getItem(PREVIEW_KEY) === '1')
+
+  useEffect(() => {
+    window.localStorage.setItem(PREVIEW_KEY, showPreview ? '1' : '0')
+  }, [showPreview])
 
   const selectedId = selection.kind === 'document' ? selection.id : null
 
@@ -301,14 +309,31 @@ export function DocumentsPanel({ directories, documents, notifier, onChanged }: 
                 </Field>
               </div>
 
-              <Field label="Content" hint="Markdown. Max 100 KB per version.">
-                <textarea
-                  className="content"
-                  value={draft.content}
-                  onChange={(event) => setDraft({ ...draft, content: event.target.value })}
-                  rows={18}
-                  spellCheck={false}
-                />
+              <Field
+                label="Content"
+                className="content-field"
+                hint="Markdown. Max 100 KB per version."
+                actions={
+                  <button
+                    type="button"
+                    onClick={() => setShowPreview((open) => !open)}
+                    aria-pressed={showPreview}
+                    title="Toggle the rendered markdown sidebar"
+                  >
+                    {showPreview ? 'Hide preview' : 'Show preview'}
+                  </button>
+                }
+              >
+                <div className={showPreview ? 'content-shell previewing' : 'content-shell'}>
+                  <textarea
+                    className="content"
+                    value={draft.content}
+                    onChange={(event) => setDraft({ ...draft, content: event.target.value })}
+                    spellCheck={false}
+                    placeholder={'# Heading\n\nWrite markdown here…'}
+                  />
+                  {showPreview ? <Markdown source={draft.content} /> : null}
+                </div>
               </Field>
 
               <div className="editor-actions">

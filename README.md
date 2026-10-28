@@ -116,7 +116,7 @@ Open `http://localhost:5173` and paste the admin token; it is kept in `localStor
 
 Screens:
 
-- **Documents** — filter and search by directory, edit metadata and markdown content, delete documents, and open the revision history to read any snapshot.
+- **Documents** — filter and search by directory, edit metadata and markdown content in an editor that fills the window, toggle a sanitized markdown preview sidebar next to the textarea, delete documents, and open the revision history to read any snapshot.
 - **Directories** — create, rename and delete directories. A directory can only be deleted once it holds no documents.
 - **API keys** — create keys with one `read` or `readwrite` scope per directory, copy the plaintext key once, regenerate a key to rotate its secret in place, and revoke keys.
 

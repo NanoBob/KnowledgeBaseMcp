@@ -27,10 +27,25 @@ export function Modal({ title, onClose, children }: { title: string; onClose: ()
   )
 }
 
-export function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
+export function Field({
+  label,
+  hint,
+  actions,
+  className,
+  children,
+}: {
+  label: string
+  hint?: string
+  actions?: ReactNode
+  className?: string
+  children: ReactNode
+}) {
   return (
-    <div className="field">
-      <span className="field-label">{label}</span>
+    <div className={className ? `field ${className}` : 'field'}>
+      <div className="field-head">
+        <span className="field-label">{label}</span>
+        {actions}
+      </div>
       {children}
       {hint ? <span className="field-hint">{hint}</span> : null}
     </div>

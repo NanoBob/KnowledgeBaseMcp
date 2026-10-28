@@ -100,9 +100,135 @@ textarea:disabled {
 }
 
 textarea.content {
-  resize: vertical;
-  min-height: 220px;
+  flex: 1;
+  min-height: 160px;
+  resize: none;
   line-height: 1.55;
+}
+
+.preview {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px 14px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.preview p.muted {
+  margin: 0;
+}
+
+.markdown > :first-child {
+  margin-top: 0;
+}
+
+.markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown h1,
+.markdown h2,
+.markdown h3 {
+  margin: 1.1em 0 0.5em;
+  line-height: 1.3;
+}
+
+.markdown h1 {
+  font-size: 1.45em;
+  padding-bottom: 0.25em;
+  border-bottom: 1px solid var(--border);
+}
+
+.markdown h2 {
+  font-size: 1.2em;
+}
+
+.markdown h3 {
+  font-size: 1.02em;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text);
+}
+
+.markdown p,
+.markdown ul,
+.markdown ol,
+.markdown blockquote,
+.markdown pre,
+.markdown table {
+  margin: 0.65em 0;
+}
+
+.markdown ul,
+.markdown ol {
+  padding-left: 1.4em;
+}
+
+.markdown li {
+  margin: 0.2em 0;
+}
+
+.markdown li > p {
+  margin: 0.2em 0;
+}
+
+.markdown code {
+  padding: 1px 5px;
+  background: var(--surface-3);
+  border-radius: 5px;
+}
+
+.markdown pre {
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow-x: auto;
+}
+
+.markdown pre code {
+  padding: 0;
+  background: none;
+}
+
+.markdown blockquote {
+  padding: 0.1em 0 0.1em 12px;
+  border-left: 3px solid var(--border);
+  color: var(--muted);
+}
+
+.markdown table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 13px;
+}
+
+.markdown th,
+.markdown td {
+  border: 1px solid var(--border);
+  padding: 5px 9px;
+  text-align: left;
+}
+
+.markdown th {
+  background: var(--surface-2);
+}
+
+.markdown a {
+  color: var(--accent);
+}
+
+.markdown img {
+  max-width: 100%;
+}
+
+.markdown hr {
+  margin: 1em 0;
+  border: none;
+  border-top: 1px solid var(--border);
 }
 
 button {
@@ -602,7 +728,33 @@ main {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   height: 100%;
-  overflow-y: auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* The content block absorbs all leftover height so the textarea fills the pane. */
+.content-field {
+  flex: 1;
+  min-height: 0;
+}
+
+.content-shell {
+  display: flex;
+  gap: 10px;
+  flex: 1;
+  min-height: 0;
+}
+
+.field-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.field-head button {
+  padding: 2px 9px;
+  font-size: 12px;
 }
 
 .editor-head {
@@ -641,6 +793,9 @@ main {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  flex: 0 1 auto;
+  max-height: 34vh;
+  overflow-y: auto;
 }
 
 .history-list {
@@ -735,5 +890,17 @@ main {
 @media (max-width: 900px) {
   .split {
     grid-template-columns: 1fr;
+  }
+
+  .editor {
+    height: auto;
+  }
+
+  .content-shell {
+    flex-direction: column;
+  }
+
+  .preview {
+    min-height: 220px;
   }
 }
