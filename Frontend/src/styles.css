@@ -449,15 +449,21 @@ main {
   white-space: nowrap;
 }
 
+/* Stays a real table cell: display:flex would break the row's border and column alignment. */
 .row-actions {
-  display: flex;
-  gap: 6px;
-  justify-content: flex-end;
+  text-align: right;
+  white-space: nowrap;
+  width: 1%;
+  vertical-align: middle;
 }
 
 .row-actions button {
   padding: 4px 10px;
   font-size: 12.5px;
+}
+
+.row-actions button + button {
+  margin-left: 6px;
 }
 
 .tag-row {
