@@ -116,4 +116,18 @@ public class DirectoryServiceTests
         Assert.Single(result);
         Assert.Equal("visible", result[0].Name);
     }
+
+    [Fact]
+    public async Task List_ReportsTheCallersAccessLevelPerDirectory()
+    {
+        var writable = await _service.CreateAsync("writable", "", "admin", default);
+        var readable = await _service.CreateAsync("readable", "", "admin", default);
+
+        var result = await _service.ListAsync(
+            Caller(Rw(writable.Id), new KeyScope { DirectoryId = readable.Id, Access = AccessLevel.Read }),
+            default);
+
+        Assert.Equal("readwrite", result.Single(d => d.Id == writable.Id).Access);
+        Assert.Equal("read", result.Single(d => d.Id == readable.Id).Access);
+    }
 }

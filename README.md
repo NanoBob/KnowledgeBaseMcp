@@ -14,7 +14,7 @@ Three entities, all identified by GUID:
 
 | Tool | Purpose |
 |------|---------|
-| `list_knowledge_directories` | List the directories the key can read. |
+| `list_knowledge_directories` | List the directories the key can read, with its `access` level (`read` or `readwrite`) per directory. |
 | `list_knowledge_documents` | List documents the key can read. Optional `directoryId`. |
 | `get_knowledge_document` | Get one document by `id`, including markdown `content`. |
 | `store_knowledge_document` | Create or update a document. Updates require `expectedVersion`. |

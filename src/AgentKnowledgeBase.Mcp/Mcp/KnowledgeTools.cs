@@ -11,8 +11,8 @@ namespace AgentKnowledgeBase.Mcp.Mcp;
 public sealed class KnowledgeTools
 {
     [McpServerTool(Name = "list_knowledge_directories", ReadOnly = true)]
-    [Description("List the document directories you can read. Documents live directly in a directory; directories never nest.")]
-    public static Task<IReadOnlyList<DirectorySummary>> ListKnowledgeDirectories(
+    [Description("List the document directories you can read, with your access level ('read' or 'readwrite') for each. Documents live directly in a directory; directories never nest.")]
+    public static Task<IReadOnlyList<DirectoryAccessSummary>> ListKnowledgeDirectories(
         DirectoryService directories,
         CallerContext callerContext,
         CancellationToken cancellationToken = default) =>

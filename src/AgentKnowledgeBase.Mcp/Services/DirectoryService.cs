@@ -9,6 +9,14 @@ public sealed record DirectorySummary(Guid Id, string Name, string Description, 
         new(directory.Id, directory.Name, directory.Description, directory.CreatedAt);
 }
 
+/// <summary>A directory as seen by a caller, including the access level that caller holds.</summary>
+public sealed record DirectoryAccessSummary(
+    Guid Id,
+    string Name,
+    string Description,
+    DateTime CreatedAt,
+    string Access);
+
 public sealed class DirectoryService(IDirectoryRepository directories, IDocumentRepository documents)
 {
     public async Task<DirectorySummary> CreateAsync(
@@ -77,14 +85,28 @@ public sealed class DirectoryService(IDirectoryRepository directories, IDocument
         }
     }
 
-    /// <summary>Directories the caller has read access to.</summary>
-    public async Task<IReadOnlyList<DirectorySummary>> ListAsync(ApiCaller caller, CancellationToken ct)
+    /// <summary>Directories the caller can read, with the access level the caller holds on each.</summary>
+    public async Task<IReadOnlyList<DirectoryAccessSummary>> ListAsync(ApiCaller caller, CancellationToken ct)
     {
         var all = await directories.ListAsync(ct);
-        return all
-            .Where(d => caller.CanRead(d.Id))
-            .Select(DirectorySummary.From)
-            .ToList();
+        var visible = new List<DirectoryAccessSummary>(all.Count);
+
+        foreach (var directory in all)
+        {
+            if (caller.AccessFor(directory.Id) is not { } access)
+            {
+                continue;
+            }
+
+            visible.Add(new DirectoryAccessSummary(
+                directory.Id,
+                directory.Name,
+                directory.Description,
+                directory.CreatedAt,
+                access.ToString().ToLowerInvariant()));
+        }
+
+        return visible;
     }
 
     public async Task<IReadOnlyList<DirectorySummary>> ListAllAsync(CancellationToken ct)
