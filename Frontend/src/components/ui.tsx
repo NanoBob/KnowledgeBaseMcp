@@ -56,6 +56,15 @@ export function Empty({ children }: { children: ReactNode }) {
   return <div className="empty">{children}</div>
 }
 
+export function Spinner({ label }: { label?: string }) {
+  return (
+    <div className="spinner-wrap" role="status" aria-live="polite">
+      <span className="spinner" aria-hidden="true" />
+      {label ? <span className="muted">{label}</span> : null}
+    </div>
+  )
+}
+
 export function formatDate(value: string): string {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value

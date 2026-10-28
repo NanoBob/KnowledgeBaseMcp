@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import { ApiError, api, describeError } from '../api'
 import type { Directory, DocumentDetail, DocumentSummary, RevisionDetail, RevisionSummary } from '../types'
-import { Empty, Field, Modal, formatDate } from './ui'
+import { Empty, Field, Modal, Spinner, formatDate } from './ui'
 import type { Notifier } from './ui'
 import { Markdown } from './Markdown'
 
@@ -57,7 +57,9 @@ export function DocumentsPanel({ directories, documents, notifier, onChanged }: 
   const [revisions, setRevisions] = useState<RevisionSummary[] | null>(null)
   const [revisionView, setRevisionView] = useState<RevisionDetail | null>(null)
   const [busy, setBusy] = useState(false)
-  const [loadingDetail, setLoadingDetail] = useState(false)
+  const [loadedId, setLoadedId] = useState<string | null>(null)
+  const [failedId, setFailedId] = useState<string | null>(null)
+  const [attempt, setAttempt] = useState(0)
   const [showPreview, setShowPreview] = useState(() => window.localStorage.getItem(PREVIEW_KEY) === '1')
 
   useEffect(() => {
@@ -65,6 +67,8 @@ export function DocumentsPanel({ directories, documents, notifier, onChanged }: 
   }, [showPreview])
 
   const selectedId = selection.kind === 'document' ? selection.id : null
+  // Derived from state rather than a fetch flag so the spinner is up on the very first paint.
+  const opening = selectedId !== null && selectedId !== loadedId && selectedId !== failedId
 
   useEffect(() => {
     if (selectedId === null) {
@@ -74,7 +78,6 @@ export function DocumentsPanel({ directories, documents, notifier, onChanged }: 
     }
 
     let cancelled = false
-    setLoadingDetail(true)
     api
       .getDocument(selectedId)
       .then((document) => {
@@ -82,18 +85,25 @@ export function DocumentsPanel({ directories, documents, notifier, onChanged }: 
         setDetail(document)
         setDraft(fromDetail(document))
         setRevisions(null)
+        setFailedId(null)
+        setLoadedId(document.id)
       })
       .catch((cause: unknown) => {
-        if (!cancelled) notifier.error(cause)
-      })
-      .finally(() => {
-        if (!cancelled) setLoadingDetail(false)
+        if (cancelled) return
+        setDetail(null)
+        setFailedId(selectedId)
+        notifier.error(cause)
       })
 
     return () => {
       cancelled = true
     }
-  }, [selectedId, notifier])
+  }, [selectedId, attempt, notifier])
+
+  function retryLoad() {
+    setFailedId(null)
+    setAttempt((value) => value + 1)
+  }
 
   const visible = useMemo(() => {
     const needle = search.trim().toLowerCase()
@@ -265,10 +275,21 @@ export function DocumentsPanel({ directories, documents, notifier, onChanged }: 
         <section className="editor-pane">
           {selection.kind === 'none' ? (
             <Empty>Select a document on the left, or create a new one.</Empty>
+          ) : opening ? (
+            <div className="editor">
+              <Spinner label="Loading document…" />
+            </div>
+          ) : selection.kind === 'document' && detail === null ? (
+            <Empty>
+              <span>That document could not be loaded.</span>
+              <button type="button" onClick={retryLoad}>
+                Retry
+              </button>
+            </Empty>
           ) : (
             <form className="editor" onSubmit={submit}>
               <div className="editor-head">
-                <h2>{selection.kind === 'new' ? 'New document' : (detail?.name ?? 'Loading…')}</h2>
+                <h2>{selection.kind === 'new' ? 'New document' : (detail?.name ?? '')}</h2>
                 {detail !== null ? <span className="pill">version {detail.version}</span> : null}
               </div>
 
@@ -337,7 +358,7 @@ export function DocumentsPanel({ directories, documents, notifier, onChanged }: 
               </Field>
 
               <div className="editor-actions">
-                <button type="submit" className="primary" disabled={busy || loadingDetail}>
+                <button type="submit" className="primary" disabled={busy}>
                   {busy ? 'Saving…' : 'Save'}
                 </button>
                 {selection.kind === 'document' ? (

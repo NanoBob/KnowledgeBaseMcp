@@ -834,6 +834,40 @@ main {
   overflow: auto;
 }
 
+/* ---------- spinner ---------- */
+
+.spinner-wrap {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 140px;
+  padding: 24px;
+  font-size: 13px;
+}
+
+.spinner {
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--surface-3);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation-duration: 2.4s;
+  }
+}
+
 /* ---------- modal ---------- */
 
 .modal-backdrop {
@@ -880,6 +914,7 @@ main {
 .empty {
   display: grid;
   place-items: center;
+  gap: 10px;
   padding: 40px 20px;
   border: 1px dashed var(--border);
   border-radius: var(--radius);
