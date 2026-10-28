@@ -592,6 +592,11 @@ main {
   gap: 12px;
 }
 
+.secret-actions {
+  display: flex;
+  gap: 6px;
+}
+
 .secret p {
   margin: 0;
   font-size: 12px;

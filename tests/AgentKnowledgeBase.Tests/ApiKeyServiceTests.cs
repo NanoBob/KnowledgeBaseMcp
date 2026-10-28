@@ -87,13 +87,18 @@ public class ApiKeyServiceTests
         Assert.Equal(KnowledgeErrorKind.NotFound, ex.Kind);
     }
 
-    [Fact]
-    public async Task Create_RejectsInvalidScopeAccess()
+    [Theory]
+    [InlineData("admin")]
+    [InlineData("1")]
+    [InlineData("2")]
+    [InlineData("-1")]
+    [InlineData("read, readwrite")]
+    public async Task Create_RejectsInvalidScopeAccess(string access)
     {
         var directoryId = await CreateDirectoryAsync();
 
         var ex = await Assert.ThrowsAsync<KnowledgeException>(() =>
-            _service.CreateAsync("agent-a", [new KeyScopeInput(directoryId, "admin")], default));
+            _service.CreateAsync("agent-a", [new KeyScopeInput(directoryId, access)], default));
 
         Assert.Equal(KnowledgeErrorKind.Validation, ex.Kind);
     }
@@ -280,14 +285,19 @@ public class ApiKeyServiceTests
         Assert.Equal(KnowledgeErrorKind.NotFound, ex.Kind);
     }
 
-    [Fact]
-    public async Task UpdateScopes_RejectsInvalidAccess()
+    [Theory]
+    [InlineData("admin")]
+    [InlineData("1")]
+    [InlineData("2")]
+    [InlineData("-1")]
+    [InlineData("read, readwrite")]
+    public async Task UpdateScopes_RejectsInvalidAccess(string access)
     {
         var directoryId = await CreateDirectoryAsync();
         var (record, _) = await _service.CreateAsync("agent-a", [new KeyScopeInput(directoryId, "read")], default);
 
         var ex = await Assert.ThrowsAsync<KnowledgeException>(() =>
-            _service.UpdateScopesAsync(record.Id, [new KeyScopeInput(directoryId, "admin")], default));
+            _service.UpdateScopesAsync(record.Id, [new KeyScopeInput(directoryId, access)], default));
 
         Assert.Equal(KnowledgeErrorKind.Validation, ex.Kind);
     }

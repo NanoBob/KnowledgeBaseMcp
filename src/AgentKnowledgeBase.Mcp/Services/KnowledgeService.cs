@@ -71,7 +71,19 @@ public sealed class KnowledgeService(IDocumentRepository documents, IDirectoryRe
             return [];
         }
 
-        var documentsPage = await documents.ListSummariesAsync(readable, directoryId, ct);
+        // A single requested directory and the caller's readable set are intersected here, so the
+        // repository never receives two filters that could contradict each other.
+        if (directoryId is { } only)
+        {
+            if (readable is not null && !readable.Contains(only))
+            {
+                return [];
+            }
+
+            readable = [only];
+        }
+
+        var documentsPage = await documents.ListSummariesAsync(readable, ct);
         var directoryNames = await LoadDirectoryNamesAsync(
             documentsPage.Select(d => d.DirectoryId).Distinct().ToList(),
             ct);

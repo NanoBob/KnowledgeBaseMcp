@@ -67,11 +67,9 @@ public sealed class FakeDocumentRepository : IDocumentRepository
 
     public Task<List<KnowledgeDocument>> ListSummariesAsync(
         IReadOnlyCollection<Guid>? directoryIds,
-        Guid? directoryId,
         CancellationToken ct) =>
         Task.FromResult(Documents.Values
             .Where(d => directoryIds is null || directoryIds.Contains(d.DirectoryId))
-            .Where(d => directoryId is null || d.DirectoryId == directoryId)
             .Select(Clone)
             .ToList());
 

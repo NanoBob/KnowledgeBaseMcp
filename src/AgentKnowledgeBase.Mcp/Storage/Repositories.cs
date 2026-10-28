@@ -41,7 +41,6 @@ public interface IDocumentRepository
     /// </summary>
     Task<List<KnowledgeDocument>> ListSummariesAsync(
         IReadOnlyCollection<Guid>? directoryIds,
-        Guid? directoryId,
         CancellationToken ct);
 
     Task<KnowledgeDocument?> FindAsync(Guid id, CancellationToken ct);
@@ -162,17 +161,11 @@ public sealed class MongoDocumentRepository(IMongoDatabase database) : IDocument
 
     public Task<List<KnowledgeDocument>> ListSummariesAsync(
         IReadOnlyCollection<Guid>? directoryIds,
-        Guid? directoryId,
         CancellationToken ct)
     {
         var filter = directoryIds is null
             ? FilterDefinition<KnowledgeDocument>.Empty
             : Builders<KnowledgeDocument>.Filter.In(d => d.DirectoryId, directoryIds);
-
-        if (directoryId is not null)
-        {
-            filter &= Builders<KnowledgeDocument>.Filter.Eq(d => d.DirectoryId, directoryId.Value);
-        }
 
         return _documents.Find(filter)
             .Project<KnowledgeDocument>(Builders<KnowledgeDocument>.Projection.Exclude(d => d.Content))

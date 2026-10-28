@@ -382,6 +382,30 @@ public class KnowledgeServiceTests
     }
 
     [Fact]
+    public async Task GetRevision_AfterMove_FollowsTheDocumentNotTheSnapshotDirectory()
+    {
+        var source = await CreateDirectoryAsync("source");
+        var target = await CreateDirectoryAsync("target");
+        var mover = Caller(Rw(source), Rw(target));
+        var created = await _service.StoreAsync(mover, Create(source, "Doc", "body"), default);
+        var preMoveRevision = (await _service.ListRevisionsAsync(mover, created.Id, default)).Single();
+        Assert.Equal(source, _repo.Revisions.Single(r => r.Id == preMoveRevision.Id).DirectoryId);
+
+        await _service.MoveAsync(mover, created.Id, target, null, default);
+
+        // Access follows the document's current directory: the old snapshot carries the source id but
+        // is no longer reachable from it.
+        var sourceOnly = Caller(R(source));
+        var hidden = await Assert.ThrowsAsync<KnowledgeException>(() =>
+            _service.GetRevisionAsync(sourceOnly, preMoveRevision.Id, default));
+        Assert.Equal(KnowledgeErrorKind.NotFound, hidden.Kind);
+
+        var detail = await _service.GetRevisionAsync(Caller(R(target)), preMoveRevision.Id, default);
+        Assert.Equal("body", detail.Content);
+        Assert.Equal(1, detail.Version);
+    }
+
+    [Fact]
     public async Task AdminCaller_ReachesEveryDirectory()
     {
         var directoryId = await CreateDirectoryAsync();

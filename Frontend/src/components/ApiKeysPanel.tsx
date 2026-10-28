@@ -287,9 +287,14 @@ export function ApiKeysPanel({ directories, notifier, secret, onSecretChange }: 
           <div className="secret">
             <div className="secret-head">
               <strong>Copy this key now</strong>
-              <button type="button" onClick={() => void copyKey()}>
-                {copied ? 'Copied' : 'Copy'}
-              </button>
+              <span className="secret-actions">
+                <button type="button" onClick={() => void copyKey()}>
+                  {copied ? 'Copied' : 'Copy'}
+                </button>
+                <button type="button" onClick={() => onSecretChange(null)}>
+                  Dismiss
+                </button>
+              </span>
             </div>
             <code className="secret-value">{secret.key}</code>
             <p className="muted">It cannot be shown again. Store it in your MCP client configuration.</p>
@@ -301,9 +306,14 @@ export function ApiKeysPanel({ directories, notifier, secret, onSecretChange }: 
         <div className="card secret">
           <div className="secret-head">
             <strong>New key for “{secret.name}”</strong>
-            <button type="button" onClick={() => void copyKey()}>
-              {copied ? 'Copied' : 'Copy'}
-            </button>
+            <span className="secret-actions">
+              <button type="button" onClick={() => void copyKey()}>
+                {copied ? 'Copied' : 'Copy'}
+              </button>
+              <button type="button" onClick={() => onSecretChange(null)}>
+                Dismiss
+              </button>
+            </span>
           </div>
           <code className="secret-value">{secret.key}</code>
           <p className="muted">

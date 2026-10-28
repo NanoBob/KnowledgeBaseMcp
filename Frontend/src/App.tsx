@@ -51,7 +51,12 @@ export default function App() {
   const notifier = useMemo<Notifier>(
     () => ({
       error: (cause: unknown) => {
-        setUnauthorized(cause instanceof ApiError && cause.status === 401)
+        if (cause instanceof ApiError && cause.status === 401) {
+          setUnauthorized(true)
+          // The gate replaces the panel, so the plaintext key should not stay in memory behind it.
+          setPendingSecret(null)
+        }
+
         pushToast('error', describeError(cause))
       },
       flash: (message: string) => {
