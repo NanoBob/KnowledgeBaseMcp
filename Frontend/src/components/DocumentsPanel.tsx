@@ -19,6 +19,7 @@ type Selection = { kind: 'none' } | { kind: 'new' } | { kind: 'document'; id: st
 const NO_SELECTION: Selection = { kind: 'none' }
 
 const PREVIEW_KEY = 'akb.editorPreview'
+const COLLAPSED_KEY = 'akb.collapsedDirectories'
 
 function emptyDraft(directoryId: string): Draft {
   return { directoryId, name: '', summary: '', tags: '', content: '' }
@@ -121,11 +122,23 @@ export function DocumentsPanel({ directories, documents, notifier, onChanged }: 
   const [failedId, setFailedId] = useState<string | null>(null)
   const [attempt, setAttempt] = useState(0)
   const [showPreview, setShowPreview] = useState(() => window.localStorage.getItem(PREVIEW_KEY) === '1')
+  const [collapsed, setCollapsed] = useState<string[]>(() => {
+    try {
+      const stored: unknown = JSON.parse(window.localStorage.getItem(COLLAPSED_KEY) ?? '[]')
+      return Array.isArray(stored) ? stored.filter((id): id is string => typeof id === 'string') : []
+    } catch {
+      return []
+    }
+  })
   const [moveTarget, setMoveTarget] = useState<string | null>(null)
 
   useEffect(() => {
     window.localStorage.setItem(PREVIEW_KEY, showPreview ? '1' : '0')
   }, [showPreview])
+
+  useEffect(() => {
+    window.localStorage.setItem(COLLAPSED_KEY, JSON.stringify(collapsed))
+  }, [collapsed])
 
   const selectedId = selection.kind === 'document' ? selection.id : null
   // Derived from state rather than a fetch flag so the skeleton is up on the very first paint.
@@ -170,17 +183,67 @@ export function DocumentsPanel({ directories, documents, notifier, onChanged }: 
     setAttempt((value) => value + 1)
   }
 
-  const visible = useMemo(() => {
-    const needle = search.trim().toLowerCase()
-    return documents.filter(
+  const needle = search.trim().toLowerCase()
+  const searching = needle !== ''
+
+  const groups = useMemo(() => {
+    const query = search.trim().toLowerCase()
+    const matched = documents.filter(
       (document) =>
-        (filter === '' || document.directoryId === filter) &&
-        (needle === '' ||
-          document.name.toLowerCase().includes(needle) ||
-          document.summary.toLowerCase().includes(needle) ||
-          document.tags.some((tag) => tag.includes(needle))),
+        query === '' ||
+        document.name.toLowerCase().includes(query) ||
+        document.summary.toLowerCase().includes(query) ||
+        document.tags.some((tag) => tag.toLowerCase().includes(query)),
     )
-  }, [documents, filter, search])
+
+    const byDirectory = new Map<string, DocumentSummary[]>()
+    for (const document of matched) {
+      const bucket = byDirectory.get(document.directoryId)
+      if (bucket === undefined) {
+        byDirectory.set(document.directoryId, [document])
+      } else {
+        bucket.push(document)
+      }
+    }
+
+    const known = directories
+      .filter((directory) => filter === '' || directory.id === filter)
+      .map((directory) => ({
+        id: directory.id,
+        name: directory.name,
+        description: directory.description,
+        documents: (byDirectory.get(directory.id) ?? []).sort((a, b) => a.name.localeCompare(b.name)),
+      }))
+
+    // Documents whose directory was deleted still need somewhere to live.
+    const orphans = [...byDirectory.entries()]
+      .filter(([directoryId]) => !directories.some((directory) => directory.id === directoryId))
+      .map(([directoryId, entries]) => ({
+        id: directoryId,
+        name: 'Unknown directory',
+        description: '',
+        documents: entries.sort((a, b) => a.name.localeCompare(b.name)),
+      }))
+
+    return [...known, ...orphans].filter((group) => query === '' || group.documents.length > 0)
+  }, [documents, directories, filter, search])
+
+  function toggleDirectory(directoryId: string) {
+    setCollapsed((current) =>
+      current.includes(directoryId)
+        ? current.filter((id) => id !== directoryId)
+        : [...current, directoryId],
+    )
+  }
+
+  // Keep the open document visible, including after a move into a collapsed directory.
+  const selectedDirectoryId =
+    detail?.directoryId ?? documents.find((document) => document.id === selectedId)?.directoryId ?? null
+
+  useEffect(() => {
+    if (selectedDirectoryId === null) return
+    setCollapsed((current) => current.filter((id) => id !== selectedDirectoryId))
+  }, [selectedDirectoryId])
 
   function startCreate() {
     setSelection({ kind: 'new' })
@@ -348,27 +411,56 @@ export function DocumentsPanel({ directories, documents, notifier, onChanged }: 
 
           {directories.length === 0 ? (
             <Empty>Create a directory first — every document lives inside one.</Empty>
-          ) : visible.length === 0 ? (
+          ) : groups.length === 0 ? (
             <Empty>No documents match this view.</Empty>
           ) : (
-            <ul className="doc-list">
-              {visible.map((document) => (
-                <li key={document.id}>
-                  <button
-                    type="button"
-                    className={document.id === selectedId ? 'doc-item active' : 'doc-item'}
-                    onClick={() => setSelection({ kind: 'document', id: document.id })}
-                  >
-                    <span className="doc-name">{document.name}</span>
-                    <span className="doc-meta">
-                      <code>{document.directoryName}</code>
-                      <span className="pill">v{document.version}</span>
-                    </span>
-                    {document.summary.length > 0 ? <span className="doc-summary">{document.summary}</span> : null}
-                  </button>
-                </li>
-              ))}
-            </ul>
+            <div className="doc-groups">
+              {groups.map((group) => {
+                const open = searching || !collapsed.includes(group.id)
+                return (
+                  <section className="doc-group" key={group.id}>
+                    <button
+                      type="button"
+                      className="doc-group-head"
+                      onClick={() => toggleDirectory(group.id)}
+                      aria-expanded={open}
+                      title={group.description.length > 0 ? group.description : undefined}
+                    >
+                      <span className={open ? 'doc-group-chevron open' : 'doc-group-chevron'} aria-hidden="true" />
+                      <span className="doc-group-name">{group.name}</span>
+                      <span className="pill">{group.documents.length}</span>
+                    </button>
+
+                    {open ? (
+                      group.documents.length === 0 ? (
+                        <p className="doc-group-empty">No documents</p>
+                      ) : (
+                        <ul className="doc-list">
+                          {group.documents.map((document) => (
+                            <li key={document.id}>
+                              <button
+                                type="button"
+                                className={document.id === selectedId ? 'doc-item active' : 'doc-item'}
+                                onClick={() => setSelection({ kind: 'document', id: document.id })}
+                              >
+                                <span className="doc-name">{document.name}</span>
+                                <span className="doc-meta">
+                                  <span className="pill">v{document.version}</span>
+                                  {document.tags.length > 0 ? <span>{document.tags.join(', ')}</span> : null}
+                                </span>
+                                {document.summary.length > 0 ? (
+                                  <span className="doc-summary">{document.summary}</span>
+                                ) : null}
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      )
+                    ) : null}
+                  </section>
+                )
+              })}
+            </div>
           )}
         </aside>
 
