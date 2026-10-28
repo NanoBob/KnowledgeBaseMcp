@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/AgentKnowledgeBase.Mcp/AgentKnowledgeBase.Mcp.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/AgentKnowledgeBase.Tests/AgentKnowledgeBase.Tests.csproj" />
+  </Folder>
+  <Project Path="AgentKnowledgeBase.Compose.dcproj">
+    <Build />
+  </Project>
+</Solution>

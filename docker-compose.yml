@@ -1,0 +1,33 @@
+name: agent-knowledge-base
+
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: agent-knowledge-base-mcp:latest
+    restart: unless-stopped
+    depends_on:
+      mongo:
+        condition: service_healthy
+    environment:
+      Mongo__ConnectionString: mongodb://mongo:27017
+      Mongo__Database: agent_knowledge
+      Admin__Token: ${ADMIN_TOKEN:?Set ADMIN_TOKEN in .env (min 16 characters)}
+    ports:
+      - "${MCP_PORT:-8080}:8080"
+
+volumes:
+  mongo-data:

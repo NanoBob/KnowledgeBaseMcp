@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.Docker.Sdk">
+  <PropertyGroup Label="Globals">
+    <ProjectVersion>2.1</ProjectVersion>
+    <DockerTargetOS>Linux</DockerTargetOS>
+    <ProjectGuid>{7C1E5B2A-3F4D-4B8E-9A61-2D0C5E8F4A13}</ProjectGuid>
+    <DockerLaunchAction>LaunchBrowser</DockerLaunchAction>
+    <DockerServiceUrl>http://localhost:{ServicePort}/health</DockerServiceUrl>
+    <DockerServiceName>mcp</DockerServiceName>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Include=".env" />
+    <None Include="docker-compose.yml" />
+    <None Include=".env.example" />
+    <None Include="Dockerfile" />
+    <None Include=".dockerignore" />
+  </ItemGroup>
+</Project>
