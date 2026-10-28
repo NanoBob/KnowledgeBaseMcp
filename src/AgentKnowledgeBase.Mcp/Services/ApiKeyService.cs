@@ -54,6 +54,20 @@ public sealed class ApiKeyService(IApiKeyRepository keys, IDirectoryRepository d
 
     public Task<List<ApiKeyRecord>> ListAsync(CancellationToken ct) => keys.ListAsync(ct);
 
+    /// <summary>
+    /// Replaces the directory permissions of an existing key. The secret is untouched, so
+    /// agents pick up the new scopes on their next call.
+    /// </summary>
+    public async Task<ApiKeyRecord> UpdateScopesAsync(
+        Guid id,
+        IEnumerable<KeyScopeInput>? scopes,
+        CancellationToken ct)
+    {
+        var parsedScopes = await ParseScopesAsync(scopes, ct);
+        return await keys.TryUpdateScopesAsync(id, parsedScopes, ct)
+            ?? throw KnowledgeException.NotFound($"no active API key with id '{id}'.");
+    }
+
     public async Task RevokeAsync(Guid id, CancellationToken ct)
     {
         if (!await keys.TryRevokeAsync(id, DateTime.UtcNow, ct))

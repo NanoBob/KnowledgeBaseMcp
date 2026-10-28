@@ -193,4 +193,114 @@ public class ApiKeyServiceTests
 
         Assert.Equal(KnowledgeErrorKind.NotFound, ex.Kind);
     }
+
+    [Fact]
+    public async Task UpdateScopes_ReplacesPermissionsAndKeepsTheSecret()
+    {
+        var engineering = await CreateDirectoryAsync("engineering");
+        var review = await CreateDirectoryAsync("review");
+        var (original, plain) = await _service.CreateAsync("agent-a",
+            [new KeyScopeInput(engineering, "readwrite")], default);
+
+        var updated = await _service.UpdateScopesAsync(original.Id,
+            [new KeyScopeInput(review, "read")], default);
+
+        Assert.Equal(original.Id, updated.Id);
+        Assert.Equal("agent-a", updated.Name);
+        Assert.Equal(ApiKeyService.Hash(plain), updated.KeyHash);
+        Assert.Equal(review, Assert.Single(updated.Scopes).DirectoryId);
+        Assert.Equal(AccessLevel.Read, updated.Scopes[0].Access);
+
+        var caller = await _service.AuthenticateAsync(plain, default);
+        Assert.NotNull(caller);
+        Assert.False(caller.CanRead(engineering));
+        Assert.True(caller.CanRead(review));
+        Assert.False(caller.CanWrite(review));
+    }
+
+    [Fact]
+    public async Task UpdateScopes_CanWidenAccess()
+    {
+        var directoryId = await CreateDirectoryAsync();
+        var (original, plain) = await _service.CreateAsync("agent-a", [new KeyScopeInput(directoryId, "read")], default);
+
+        await _service.UpdateScopesAsync(original.Id, [new KeyScopeInput(directoryId, "readwrite")], default);
+
+        var caller = await _service.AuthenticateAsync(plain, default);
+        Assert.NotNull(caller);
+        Assert.True(caller.CanWrite(directoryId));
+    }
+
+    [Fact]
+    public async Task UpdateScopes_UnknownKey_IsNotFound()
+    {
+        var directoryId = await CreateDirectoryAsync();
+
+        var ex = await Assert.ThrowsAsync<KnowledgeException>(() =>
+            _service.UpdateScopesAsync(Guid.NewGuid(), [new KeyScopeInput(directoryId, "read")], default));
+
+        Assert.Equal(KnowledgeErrorKind.NotFound, ex.Kind);
+    }
+
+    [Fact]
+    public async Task UpdateScopes_RevokedKey_IsNotFound()
+    {
+        var directoryId = await CreateDirectoryAsync();
+        var (record, _) = await _service.CreateAsync("agent-a", [new KeyScopeInput(directoryId, "read")], default);
+        await _service.RevokeAsync(record.Id, default);
+
+        var ex = await Assert.ThrowsAsync<KnowledgeException>(() =>
+            _service.UpdateScopesAsync(record.Id, [new KeyScopeInput(directoryId, "readwrite")], default));
+
+        Assert.Equal(KnowledgeErrorKind.NotFound, ex.Kind);
+    }
+
+    [Fact]
+    public async Task UpdateScopes_RequiresAtLeastOneScope()
+    {
+        var directoryId = await CreateDirectoryAsync();
+        var (record, _) = await _service.CreateAsync("agent-a", [new KeyScopeInput(directoryId, "read")], default);
+
+        var ex = await Assert.ThrowsAsync<KnowledgeException>(() =>
+            _service.UpdateScopesAsync(record.Id, [], default));
+
+        Assert.Equal(KnowledgeErrorKind.Validation, ex.Kind);
+        Assert.Equal(directoryId, Assert.Single(_repo.Keys[0].Scopes).DirectoryId);
+    }
+
+    [Fact]
+    public async Task UpdateScopes_RejectsUnknownDirectory()
+    {
+        var directoryId = await CreateDirectoryAsync();
+        var (record, _) = await _service.CreateAsync("agent-a", [new KeyScopeInput(directoryId, "read")], default);
+
+        var ex = await Assert.ThrowsAsync<KnowledgeException>(() =>
+            _service.UpdateScopesAsync(record.Id, [new KeyScopeInput(Guid.NewGuid(), "read")], default));
+
+        Assert.Equal(KnowledgeErrorKind.NotFound, ex.Kind);
+    }
+
+    [Fact]
+    public async Task UpdateScopes_RejectsInvalidAccess()
+    {
+        var directoryId = await CreateDirectoryAsync();
+        var (record, _) = await _service.CreateAsync("agent-a", [new KeyScopeInput(directoryId, "read")], default);
+
+        var ex = await Assert.ThrowsAsync<KnowledgeException>(() =>
+            _service.UpdateScopesAsync(record.Id, [new KeyScopeInput(directoryId, "admin")], default));
+
+        Assert.Equal(KnowledgeErrorKind.Validation, ex.Kind);
+    }
+
+    [Fact]
+    public async Task UpdateScopes_DedupesScopesKeepingHighestAccess()
+    {
+        var directoryId = await CreateDirectoryAsync();
+        var (record, _) = await _service.CreateAsync("agent-a", [new KeyScopeInput(directoryId, "read")], default);
+
+        var updated = await _service.UpdateScopesAsync(record.Id,
+            [new KeyScopeInput(directoryId, "read"), new KeyScopeInput(directoryId, "readwrite")], default);
+
+        Assert.Equal(AccessLevel.ReadWrite, Assert.Single(updated.Scopes).Access);
+    }
 }

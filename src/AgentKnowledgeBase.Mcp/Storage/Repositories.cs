@@ -72,6 +72,12 @@ public interface IApiKeyRepository
     /// Returns null when no active key with that id exists.
     /// </summary>
     Task<ApiKeyRecord?> TryRotateAsync(Guid id, string newKeyHash, DateTime rotatedAt, CancellationToken ct);
+
+    /// <summary>
+    /// Replaces the key's directory scopes in place, keeping its id, name and secret.
+    /// Returns null when no active key with that id exists.
+    /// </summary>
+    Task<ApiKeyRecord?> TryUpdateScopesAsync(Guid id, List<KeyScope> scopes, CancellationToken ct);
 }
 
 public sealed class MongoDirectoryRepository(IMongoDatabase database) : IDirectoryRepository
@@ -246,6 +252,14 @@ public sealed class MongoApiKeyRepository(IMongoDatabase database) : IApiKeyRepo
         var update = Builders<ApiKeyRecord>.Update
             .Set(k => k.KeyHash, newKeyHash)
             .Set(k => k.RotatedAt, rotatedAt);
+        var options = new FindOneAndUpdateOptions<ApiKeyRecord> { ReturnDocument = ReturnDocument.After };
+        return _keys.FindOneAndUpdateAsync(filter, update, options, ct)!;
+    }
+
+    public Task<ApiKeyRecord?> TryUpdateScopesAsync(Guid id, List<KeyScope> scopes, CancellationToken ct)
+    {
+        var filter = Builders<ApiKeyRecord>.Filter.Where(k => k.Id == id && k.RevokedAt == null);
+        var update = Builders<ApiKeyRecord>.Update.Set(k => k.Scopes, scopes);
         var options = new FindOneAndUpdateOptions<ApiKeyRecord> { ReturnDocument = ReturnDocument.After };
         return _keys.FindOneAndUpdateAsync(filter, update, options, ct)!;
     }

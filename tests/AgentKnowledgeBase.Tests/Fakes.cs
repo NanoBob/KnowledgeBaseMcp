@@ -196,4 +196,16 @@ public sealed class FakeApiKeyRepository : IApiKeyRepository
         key.RotatedAt = rotatedAt;
         return Task.FromResult<ApiKeyRecord?>(key);
     }
+
+    public Task<ApiKeyRecord?> TryUpdateScopesAsync(Guid id, List<KeyScope> scopes, CancellationToken ct)
+    {
+        var key = Keys.FirstOrDefault(k => k.Id == id && k.RevokedAt is null);
+        if (key is null)
+        {
+            return Task.FromResult<ApiKeyRecord?>(null);
+        }
+
+        key.Scopes = scopes;
+        return Task.FromResult<ApiKeyRecord?>(key);
+    }
 }

@@ -144,4 +144,6 @@ export const api = {
   revokeApiKey: (id: string) => request<void>(`/admin/api-keys/${id}`, { method: 'DELETE' }),
   regenerateApiKey: (id: string) =>
     request<ApiKeyCreated>(`/admin/api-keys/${id}/regenerate`, { method: 'POST' }),
+  updateApiKeyScopes: (id: string, scopes: KeyScope[]) =>
+    request<ApiKeySummary>(`/admin/api-keys/${id}/scopes`, { method: 'PUT', body: JSON.stringify({ scopes }) }),
 }

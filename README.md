@@ -66,8 +66,9 @@ curl -X POST http://localhost:8080/admin/api-keys \
   -d '{"name":"build-agent","scopes":[{"directoryId":"<directory-guid>","access":"readwrite"}]}'
 ```
 
-To change a key's scopes, create a new key and revoke the old one. To rotate a leaked secret while keeping its name
-and scopes, call `POST /admin/api-keys/{id}/regenerate`; the previous secret stops authenticating immediately.
+To change a key's scopes, call `PUT /admin/api-keys/{id}/scopes` with the full replacement scope list; the secret and
+name stay the same, so agents pick up the new permissions on their next call. To rotate a leaked secret while keeping
+its name and scopes, call `POST /admin/api-keys/{id}/regenerate`; the previous secret stops authenticating immediately.
 
 ## Admin REST API
 
@@ -91,6 +92,7 @@ Every call needs the admin token in an `X-Admin-Token` header (or `Authorization
 | `GET` | `/admin/api-keys` | List keys without their secrets. |
 | `POST` | `/admin/api-keys` | Create a key; the plaintext key is returned once. |
 | `POST` | `/admin/api-keys/{id}/regenerate` | Issue a new secret for the same key and scopes; the old secret stops working. Returns the new plaintext once. |
+| `PUT` | `/admin/api-keys/{id}/scopes` | Replace a key's directory scopes in place, keeping its secret. |
 | `DELETE` | `/admin/api-keys/{id}` | Revoke a key. This takes effect on the next request. |
 
 `PUT /admin/documents/{id}` accepts an optional `expectedVersion`. Omit it to overwrite whatever is stored, or send the version you last read to get a `409` when someone else changed the document first.
@@ -123,7 +125,8 @@ Screens:
 
 - **Documents** — filter and search by directory, edit metadata and markdown content in an editor that fills the window, toggle a sanitized markdown preview sidebar next to the textarea, move a document to another directory, delete documents, and open the revision history to read any snapshot. A skeleton placeholder fills the editor while a document loads.
 - **Directories** — create, rename and delete directories. A directory can only be deleted once it holds no documents.
-- **API keys** — create keys with one `read` or `readwrite` scope per directory, copy the plaintext key once, regenerate a key to rotate its secret in place, and revoke keys.
+- **API keys** — create keys with one `read` or `readwrite` scope per directory, edit the scopes of an existing key,
+  copy the plaintext key once, regenerate a key to rotate its secret in place, and revoke keys.
 
 `npm run build` produces a static bundle in `Frontend/dist`.
 

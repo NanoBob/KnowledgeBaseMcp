@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../api'
-import type { ApiKeySummary, Directory } from '../types'
-import { Empty, Field, formatDate } from './ui'
+import type { ApiKeySummary, Directory, KeyScope } from '../types'
+import { Empty, Field, Modal, formatDate } from './ui'
 import type { Notifier } from './ui'
 
 interface ScopeRow {
@@ -14,6 +14,79 @@ interface Props {
   notifier: Notifier
 }
 
+function ScopeEditor({
+  directories,
+  scopes,
+  onChange,
+  defaultDirectoryId,
+}: {
+  directories: Directory[]
+  scopes: ScopeRow[]
+  onChange: (scopes: ScopeRow[]) => void
+  defaultDirectoryId: string
+}) {
+  function updateScope(index: number, patch: Partial<ScopeRow>) {
+    onChange(scopes.map((row, rowIndex) => (rowIndex === index ? { ...row, ...patch } : row)))
+  }
+
+  function addScope() {
+    onChange([...scopes, { directoryId: defaultDirectoryId, access: 'read' }])
+  }
+
+  function removeScope(index: number) {
+    onChange(scopes.filter((_, rowIndex) => rowIndex !== index))
+  }
+
+  return (
+    <div className="scope-list">
+      <span className="field-label">Directory scopes</span>
+      {scopes.length === 0 ? (
+        <p className="muted">No scopes yet — add at least one.</p>
+      ) : (
+        scopes.map((row, index) => (
+          <div className="scope-row" key={`${row.directoryId}-${index}`}>
+            <select
+              value={row.directoryId}
+              onChange={(event) => updateScope(index, { directoryId: event.target.value })}
+              aria-label="Directory"
+            >
+              {directories.some((directory) => directory.id === row.directoryId) ? null : (
+                <option value={row.directoryId}>unknown directory</option>
+              )}
+              {directories.map((directory) => (
+                <option key={directory.id} value={directory.id}>
+                  {directory.name}
+                </option>
+              ))}
+            </select>
+            <select
+              value={row.access}
+              onChange={(event) => updateScope(index, { access: event.target.value as ScopeRow['access'] })}
+              aria-label="Access"
+            >
+              <option value="read">read</option>
+              <option value="readwrite">read + write</option>
+            </select>
+            <button type="button" className="icon" onClick={() => removeScope(index)} aria-label="Remove scope">
+              ×
+            </button>
+          </div>
+        ))
+      )}
+      <button type="button" onClick={addScope} disabled={directories.length === 0}>
+        Add scope
+      </button>
+    </div>
+  )
+}
+
+function toScopeRows(scopes: KeyScope[], fallbackDirectoryId: string): ScopeRow[] {
+  return scopes.map((scope) => ({
+    directoryId: scope.directoryId ?? fallbackDirectoryId,
+    access: scope.access === 'readwrite' ? 'readwrite' : 'read',
+  }))
+}
+
 export function ApiKeysPanel({ directories, notifier }: Props) {
   const [keys, setKeys] = useState<ApiKeySummary[]>([])
   const [loading, setLoading] = useState(true)
@@ -21,6 +94,8 @@ export function ApiKeysPanel({ directories, notifier }: Props) {
   const [scopes, setScopes] = useState<ScopeRow[]>([])
   const [creating, setCreating] = useState(false)
   const [regeneratingId, setRegeneratingId] = useState<string | null>(null)
+  const [editing, setEditing] = useState<{ key: ApiKeySummary; scopes: ScopeRow[] } | null>(null)
+  const [savingScopes, setSavingScopes] = useState(false)
   const [createdKey, setCreatedKey] = useState<{ name: string; key: string; action: 'created' | 'regenerated' } | null>(
     null,
   )
@@ -54,16 +129,33 @@ export function ApiKeysPanel({ directories, notifier }: Props) {
     )
   }, [firstDirectoryId])
 
-  function updateScope(index: number, patch: Partial<ScopeRow>) {
-    setScopes((current) => current.map((row, rowIndex) => (rowIndex === index ? { ...row, ...patch } : row)))
+  function startEditScopes(key: ApiKeySummary) {
+    setEditing({ key, scopes: toScopeRows(key.scopes, firstDirectoryId) })
   }
 
-  function addScope() {
-    setScopes((current) => [...current, { directoryId: firstDirectoryId, access: 'read' }])
-  }
+  async function saveScopes() {
+    if (editing === null) return
+    const rows = editing.scopes.filter((row) => row.directoryId !== '')
+    if (rows.length === 0) {
+      notifier.error(new Error('Keep at least one directory scope.'))
+      return
+    }
 
-  function removeScope(index: number) {
-    setScopes((current) => current.filter((_, rowIndex) => rowIndex !== index))
+    setSavingScopes(true)
+    try {
+      await api.updateApiKeyScopes(
+        editing.key.id,
+        rows.map((row) => ({ directoryId: row.directoryId, access: row.access })),
+      )
+      const keyName = editing.key.name
+      setEditing(null)
+      await load()
+      notifier.flash(`Updated directory permissions for "${keyName}".`)
+    } catch (cause) {
+      notifier.error(cause)
+    } finally {
+      setSavingScopes(false)
+    }
   }
 
   async function create() {
@@ -146,8 +238,8 @@ export function ApiKeysPanel({ directories, notifier }: Props) {
         <div>
           <h2>API keys</h2>
           <p className="muted">
-            Keys grant read or read-write access per directory. The plaintext key is shown once, right after creation or
-            regeneration.
+            Keys grant read or read-write access per directory, and their permissions can be changed later without
+            issuing a new secret. The plaintext key is shown once, right after creation or regeneration.
           </p>
         </div>
       </header>
@@ -159,42 +251,12 @@ export function ApiKeysPanel({ directories, notifier }: Props) {
             <input value={name} onChange={(event) => setName(event.target.value)} placeholder="my-agent" />
           </Field>
 
-          <div className="scope-list">
-            <span className="field-label">Directory scopes</span>
-            {scopes.length === 0 ? (
-              <p className="muted">No scopes yet — add at least one.</p>
-            ) : (
-              scopes.map((row, index) => (
-                <div className="scope-row" key={`${row.directoryId}-${index}`}>
-                  <select
-                    value={row.directoryId}
-                    onChange={(event) => updateScope(index, { directoryId: event.target.value })}
-                    aria-label="Directory"
-                  >
-                    {directories.map((directory) => (
-                      <option key={directory.id} value={directory.id}>
-                        {directory.name}
-                      </option>
-                    ))}
-                  </select>
-                  <select
-                    value={row.access}
-                    onChange={(event) => updateScope(index, { access: event.target.value as ScopeRow['access'] })}
-                    aria-label="Access"
-                  >
-                    <option value="read">read</option>
-                    <option value="readwrite">read + write</option>
-                  </select>
-                  <button type="button" className="icon" onClick={() => removeScope(index)} aria-label="Remove scope">
-                    ×
-                  </button>
-                </div>
-              ))
-            )}
-            <button type="button" onClick={addScope} disabled={directories.length === 0}>
-              Add scope
-            </button>
-          </div>
+          <ScopeEditor
+            directories={directories}
+            scopes={scopes}
+            onChange={setScopes}
+            defaultDirectoryId={firstDirectoryId}
+          />
 
           <div className="form-actions">
             <button type="button" className="primary" onClick={() => void create()} disabled={creating || directories.length === 0}>
@@ -281,6 +343,9 @@ export function ApiKeysPanel({ directories, notifier }: Props) {
                 <td className="row-actions">
                   {key.revokedAt === null ? (
                     <>
+                      <button type="button" onClick={() => startEditScopes(key)} disabled={directories.length === 0}>
+                        Edit scopes
+                      </button>
                       <button
                         type="button"
                         onClick={() => void regenerate(key)}
@@ -299,6 +364,28 @@ export function ApiKeysPanel({ directories, notifier }: Props) {
           </tbody>
         </table>
       )}
+
+      {editing !== null ? (
+        <Modal title={`Permissions for "${editing.key.name}"`} onClose={() => setEditing(null)}>
+          <p className="muted">
+            The key itself stays the same — agents pick up the new permissions on their next call.
+          </p>
+          <ScopeEditor
+            directories={directories}
+            scopes={editing.scopes}
+            onChange={(rows) => setEditing({ ...editing, scopes: rows })}
+            defaultDirectoryId={firstDirectoryId}
+          />
+          <div className="modal-actions">
+            <button type="button" className="primary" onClick={() => void saveScopes()} disabled={savingScopes}>
+              {savingScopes ? 'Saving…' : 'Save permissions'}
+            </button>
+            <button type="button" onClick={() => setEditing(null)} disabled={savingScopes}>
+              Cancel
+            </button>
+          </div>
+        </Modal>
+      ) : null}
     </section>
   )
 }

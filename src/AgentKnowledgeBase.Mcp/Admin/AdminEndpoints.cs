@@ -10,6 +10,8 @@ public sealed record CreateApiKeyRequest(string? Name, List<CreateKeyScope>? Sco
 
 public sealed record CreateKeyScope(Guid? DirectoryId, string? Access);
 
+public sealed record UpdateApiKeyScopesRequest(List<CreateKeyScope>? Scopes);
+
 public sealed record ApiKeyCreatedResponse(Guid Id, string Name, string Key, IReadOnlyList<CreateKeyScope> Scopes, DateTime CreatedAt);
 
 public sealed record ApiKeySummaryResponse(Guid Id, string Name, IReadOnlyList<CreateKeyScope> Scopes, DateTime CreatedAt, DateTime? RotatedAt, DateTime? RevokedAt);
@@ -149,11 +151,21 @@ public static class AdminEndpoints
             return Results.Ok(ToCreatedResponse(record, plainText));
         });
 
+        group.MapPut("/{id:guid}/scopes", async (
+            Guid id,
+            UpdateApiKeyScopesRequest request,
+            ApiKeyService keys,
+            CancellationToken ct) =>
+        {
+            var scopes = request.Scopes?.Select(s => new KeyScopeInput(s.DirectoryId, s.Access)).ToList();
+            var record = await keys.UpdateScopesAsync(id, scopes, ct);
+            return Results.Ok(ToSummaryResponse(record));
+        });
+
         group.MapGet("/", async (ApiKeyService keys, CancellationToken ct) =>
         {
             var records = await keys.ListAsync(ct);
-            return Results.Ok(records.Select(r => new ApiKeySummaryResponse(
-                r.Id, r.Name, r.Scopes.Select(ToDto).ToList(), r.CreatedAt, r.RotatedAt, r.RevokedAt)));
+            return Results.Ok(records.Select(ToSummaryResponse));
         });
 
         group.MapDelete("/{id:guid}", async (Guid id, ApiKeyService keys, CancellationToken ct) =>
@@ -186,6 +198,9 @@ public static class AdminEndpoints
 
     private static ApiKeyCreatedResponse ToCreatedResponse(ApiKeyRecord record, string plainText) =>
         new(record.Id, record.Name, plainText, record.Scopes.Select(ToDto).ToList(), record.CreatedAt);
+
+    private static ApiKeySummaryResponse ToSummaryResponse(ApiKeyRecord record) =>
+        new(record.Id, record.Name, record.Scopes.Select(ToDto).ToList(), record.CreatedAt, record.RotatedAt, record.RevokedAt);
 
     private static bool IsAdmin(HttpRequest request, string expectedToken)
     {
