@@ -11,6 +11,12 @@ public interface IDirectoryRepository
 
     /// <summary>Inserts a new directory. Returns false when the name is already taken.</summary>
     Task<bool> TryInsertAsync(KnowledgeDocumentDirectory directory, CancellationToken ct);
+
+    /// <summary>Replaces the directory. Returns false when another directory already uses the name.</summary>
+    Task<bool> TryUpdateAsync(KnowledgeDocumentDirectory directory, CancellationToken ct);
+
+    /// <summary>Deletes the directory. Returns false when it does not exist.</summary>
+    Task<bool> DeleteAsync(Guid id, CancellationToken ct);
 }
 
 public enum ReplaceOutcome
@@ -36,7 +42,18 @@ public interface IDocumentRepository
     /// <summary>Replaces the document only if the stored version still equals <paramref name="expectedVersion"/>.</summary>
     Task<ReplaceOutcome> TryReplaceAsync(KnowledgeDocument document, int expectedVersion, CancellationToken ct);
 
+    Task<bool> DeleteAsync(Guid id, CancellationToken ct);
+
+    Task<int> CountByDirectoryAsync(Guid directoryId, CancellationToken ct);
+
+    /// <summary>Revision metadata, newest first, without the document content.</summary>
+    Task<List<KnowledgeDocumentRevision>> ListRevisionsAsync(Guid documentId, CancellationToken ct);
+
+    Task<KnowledgeDocumentRevision?> FindRevisionAsync(Guid revisionId, CancellationToken ct);
+
     Task AddRevisionAsync(KnowledgeDocumentRevision revision, CancellationToken ct);
+
+    Task DeleteRevisionsAsync(Guid documentId, CancellationToken ct);
 }
 
 public interface IApiKeyRepository
@@ -75,6 +92,26 @@ public sealed class MongoDirectoryRepository(IMongoDatabase database) : IDirecto
         {
             return false;
         }
+    }
+
+    public async Task<bool> TryUpdateAsync(KnowledgeDocumentDirectory directory, CancellationToken ct)
+    {
+        try
+        {
+            var result = await _directories.ReplaceOneAsync(
+                d => d.Id == directory.Id, directory, cancellationToken: ct);
+            return result.MatchedCount == 1;
+        }
+        catch (MongoWriteException ex) when (ex.WriteError.Category == ServerErrorCategory.DuplicateKey)
+        {
+            return false;
+        }
+    }
+
+    public async Task<bool> DeleteAsync(Guid id, CancellationToken ct)
+    {
+        var result = await _directories.DeleteOneAsync(d => d.Id == id, ct);
+        return result.DeletedCount == 1;
     }
 
     public static async Task EnsureIndexesAsync(IMongoDatabase database, CancellationToken ct)
@@ -132,6 +169,27 @@ public sealed class MongoDocumentRepository(IMongoDatabase database) : IDocument
 
     public Task AddRevisionAsync(KnowledgeDocumentRevision revision, CancellationToken ct) =>
         _revisions.InsertOneAsync(revision, cancellationToken: ct);
+
+    public async Task<bool> DeleteAsync(Guid id, CancellationToken ct)
+    {
+        var result = await _documents.DeleteOneAsync(d => d.Id == id, ct);
+        return result.DeletedCount == 1;
+    }
+
+    public async Task<int> CountByDirectoryAsync(Guid directoryId, CancellationToken ct) =>
+        (int)await _documents.CountDocumentsAsync(d => d.DirectoryId == directoryId, cancellationToken: ct);
+
+    public Task<List<KnowledgeDocumentRevision>> ListRevisionsAsync(Guid documentId, CancellationToken ct) =>
+        _revisions.Find(r => r.DocumentId == documentId)
+            .Project<KnowledgeDocumentRevision>(Builders<KnowledgeDocumentRevision>.Projection.Exclude(r => r.Content))
+            .SortByDescending(r => r.Version)
+            .ToListAsync(ct);
+
+    public Task<KnowledgeDocumentRevision?> FindRevisionAsync(Guid revisionId, CancellationToken ct) =>
+        _revisions.Find(r => r.Id == revisionId).FirstOrDefaultAsync(ct)!;
+
+    public Task DeleteRevisionsAsync(Guid documentId, CancellationToken ct) =>
+        _revisions.DeleteManyAsync(r => r.DocumentId == documentId, ct);
 
     public static async Task EnsureIndexesAsync(IMongoDatabase database, CancellationToken ct)
     {

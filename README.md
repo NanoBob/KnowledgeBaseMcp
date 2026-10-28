@@ -44,6 +44,7 @@ Data is stored in the `mongo-data` named volume. Run `docker compose down -v` to
 | `MCP_PORT` | `8080` | Host port. |
 | `Mongo__ConnectionString` | `mongodb://mongo:27017` | MongoDB connection string. |
 | `Mongo__Database` | `agent_knowledge` | Database name. |
+| `Frontend__Origins__0`, `…__1`, … | `http://localhost:5173`, `http://localhost:4173` | Browser origins allowed to call the admin API. |
 
 ## Managing directories and API keys
 
@@ -65,13 +66,59 @@ curl -X POST http://localhost:8080/admin/api-keys \
   -d '{"name":"build-agent","scopes":[{"directoryId":"<directory-guid>","access":"readwrite"}]}'
 ```
 
-Other admin calls:
-
-- `GET /admin/directories` lists directories, including ones the token's keys cannot read.
-- `GET /admin/api-keys` lists keys without their secrets.
-- `DELETE /admin/api-keys/{id}` revokes a key. This takes effect on the next request.
-
 To change a key's scopes, create a new key and revoke the old one.
+
+## Admin REST API
+
+Every call needs the admin token in an `X-Admin-Token` header (or `Authorization: Bearer`). The token is not scoped: it reaches every directory.
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/admin/directories` | List all directories. |
+| `POST` | `/admin/directories` | Create a directory from `{ name, description }`. |
+| `GET` | `/admin/directories/{id}` | Read one directory. |
+| `PUT` | `/admin/directories/{id}` | Rename or re-describe a directory. |
+| `DELETE` | `/admin/directories/{id}` | Delete an empty directory. |
+| `GET` | `/admin/documents` | List documents, optionally filtered by `?directoryId=`. |
+| `POST` | `/admin/documents` | Create a document from `{ directoryId, name, summary, tags, content }`. |
+| `GET` | `/admin/documents/{id}` | Read a document, including content. |
+| `PUT` | `/admin/documents/{id}` | Update a document. Sends a new revision. |
+| `DELETE` | `/admin/documents/{id}` | Delete a document and its revisions. |
+| `GET` | `/admin/documents/{id}/revisions` | List revision metadata, newest first. |
+| `GET` | `/admin/revisions/{id}` | Read one revision snapshot, including content. |
+| `GET` | `/admin/api-keys` | List keys without their secrets. |
+| `POST` | `/admin/api-keys` | Create a key; the plaintext key is returned once. |
+| `DELETE` | `/admin/api-keys/{id}` | Revoke a key. This takes effect on the next request. |
+
+`PUT /admin/documents/{id}` accepts an optional `expectedVersion`. Omit it to overwrite whatever is stored, or send the version you last read to get a `409` when someone else changed the document first.
+
+Errors come back as JSON with an HTTP status that matches the failure:
+
+```json
+{ "error": "document '…' is at version 3. Retry with expectedVersion=3 to update it.", "kind": "conflict", "latestVersion": 3 }
+```
+
+`kind` is one of `validation` (400), `notfound` (404), `forbidden` (403) or `conflict` (409).
+
+## Admin UI
+
+`Frontend/` holds a small React + Vite single-page app for managing directories, documents, revisions and API keys.
+
+```
+cd Frontend
+npm install
+npm run dev
+```
+
+Open `http://localhost:5173` and paste the admin token; it is kept in `localStorage` and sent as `X-Admin-Token`. The dev server proxies `/admin` and `/health` to `http://localhost:8080`, so no CORS setup is needed. Point it elsewhere with `AKB_API_URL`, or call the API directly by setting `VITE_API_BASE` in `Frontend/.env` — the server allows the origins in `Frontend:Origins` (`http://localhost:5173` and `http://localhost:4173` by default).
+
+Screens:
+
+- **Documents** — filter and search by directory, edit metadata and markdown content, delete documents, and open the revision history to read any snapshot.
+- **Directories** — create, rename and delete directories. A directory can only be deleted once it holds no documents.
+- **API keys** — create keys with one `read` or `readwrite` scope per directory, copy the plaintext key once, and revoke keys.
+
+`npm run build` produces a static bundle in `Frontend/dist`.
 
 ## Connecting a client
 

@@ -86,9 +86,13 @@ public sealed class ApiKeyRecord
 }
 
 /// <summary>An authenticated API key for the current request.</summary>
-public sealed record ApiCaller(Guid KeyId, string Name, IReadOnlyList<KeyScope> Scopes)
+public sealed record ApiCaller(Guid KeyId, string Name, IReadOnlyList<KeyScope> Scopes, bool IsAdmin = false)
 {
-    public AccessLevel? AccessFor(Guid directoryId) => AccessPolicy.GetLevel(Scopes, directoryId);
+    /// <summary>Full access, used by the admin API which authenticates with the admin token instead of a key.</summary>
+    public static ApiCaller Admin { get; } = new(Guid.Empty, "admin", [], IsAdmin: true);
+
+    public AccessLevel? AccessFor(Guid directoryId) =>
+        IsAdmin ? AccessLevel.ReadWrite : AccessPolicy.GetLevel(Scopes, directoryId);
 
     public bool CanRead(Guid directoryId) => AccessFor(directoryId) is not null;
 

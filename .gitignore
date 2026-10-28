@@ -4,3 +4,10 @@ obj/
 .vscode/
 *.user
 .env
+
+# Frontend
+node_modules/
+dist/
+Frontend/.env
+Frontend/.env.local
+*.tsbuildinfo

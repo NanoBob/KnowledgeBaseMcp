@@ -16,11 +16,32 @@ public sealed record ApiKeySummaryResponse(Guid Id, string Name, IReadOnlyList<C
 
 public sealed record CreateDirectoryRequest(string? Name, string? Description);
 
+public sealed record UpdateDirectoryRequest(string? Name, string? Description);
+
+public sealed record StoreDocumentRequest(
+    Guid? DirectoryId,
+    string? Name,
+    string? Summary,
+    string[]? Tags,
+    string? Content,
+    int? ExpectedVersion);
+
+public sealed record StoreDocumentResponse(Guid Id, Guid DirectoryId, string Name, int Version, bool Created);
+
 public static class AdminEndpoints
 {
     public static RouteGroupBuilder MapAdminApi(this WebApplication app)
     {
+        MapDirectories(app);
+        MapDocuments(app);
+        MapRevisions(app);
+        return MapApiKeys(app);
+    }
+
+    private static void MapDirectories(WebApplication app)
+    {
         var directories = MapAdminGroup(app, "/admin/directories");
+
         directories.MapPost("/", async (CreateDirectoryRequest request, DirectoryService service, CancellationToken ct) =>
         {
             var directory = await service.CreateAsync(request.Name, request.Description, "admin", ct);
@@ -30,6 +51,72 @@ public static class AdminEndpoints
         directories.MapGet("/", async (DirectoryService service, CancellationToken ct) =>
             Results.Ok(await service.ListAllAsync(ct)));
 
+        directories.MapGet("/{id:guid}", async (Guid id, DirectoryService service, CancellationToken ct) =>
+            Results.Ok(await service.GetAsync(id, ct)));
+
+        directories.MapPut("/{id:guid}", async (
+            Guid id,
+            UpdateDirectoryRequest request,
+            DirectoryService service,
+            CancellationToken ct) =>
+            Results.Ok(await service.UpdateAsync(id, request.Name, request.Description, ct)));
+
+        directories.MapDelete("/{id:guid}", async (Guid id, DirectoryService service, CancellationToken ct) =>
+        {
+            await service.DeleteAsync(id, ct);
+            return Results.NoContent();
+        });
+    }
+
+    private static void MapDocuments(WebApplication app)
+    {
+        var documents = MapAdminGroup(app, "/admin/documents");
+
+        documents.MapGet("/", async (Guid? directoryId, KnowledgeService knowledge, CancellationToken ct) =>
+            Results.Ok(await knowledge.ListAsync(ApiCaller.Admin, directoryId, ct)));
+
+        documents.MapGet("/{id:guid}", async (Guid id, KnowledgeService knowledge, CancellationToken ct) =>
+            Results.Ok(await knowledge.GetAsync(ApiCaller.Admin, id, ct)));
+
+        documents.MapGet("/{id:guid}/revisions", async (Guid id, KnowledgeService knowledge, CancellationToken ct) =>
+            Results.Ok(await knowledge.ListRevisionsAsync(ApiCaller.Admin, id, ct)));
+
+        documents.MapPost("/", async (StoreDocumentRequest request, KnowledgeService knowledge, CancellationToken ct) =>
+        {
+            var result = await knowledge.StoreAsync(ApiCaller.Admin, ToStoreRequest(null, request), ct);
+            return Results.Created($"/admin/documents/{result.Id}", ToResponse(result));
+        });
+
+        documents.MapPut("/{id:guid}", async (
+            Guid id,
+            StoreDocumentRequest request,
+            KnowledgeService knowledge,
+            CancellationToken ct) =>
+        {
+            // Omitting expectedVersion lets the admin client overwrite whatever is stored.
+            var expectedVersion = request.ExpectedVersion
+                ?? (await knowledge.GetAsync(ApiCaller.Admin, id, ct)).Version;
+            var result = await knowledge.StoreAsync(ApiCaller.Admin, ToStoreRequest(id, request, expectedVersion), ct);
+            return Results.Ok(ToResponse(result));
+        });
+
+        documents.MapDelete("/{id:guid}", async (Guid id, KnowledgeService knowledge, CancellationToken ct) =>
+        {
+            await knowledge.DeleteAsync(ApiCaller.Admin, id, ct);
+            return Results.NoContent();
+        });
+    }
+
+    private static void MapRevisions(WebApplication app)
+    {
+        var revisions = MapAdminGroup(app, "/admin/revisions");
+
+        revisions.MapGet("/{id:guid}", async (Guid id, KnowledgeService knowledge, CancellationToken ct) =>
+            Results.Ok(await knowledge.GetRevisionAsync(ApiCaller.Admin, id, ct)));
+    }
+
+    private static RouteGroupBuilder MapApiKeys(WebApplication app)
+    {
         var group = MapAdminGroup(app, "/admin/api-keys");
         group.MapPost("/", async (CreateApiKeyRequest request, ApiKeyService keys, CancellationToken ct) =>
         {
@@ -60,6 +147,12 @@ public static class AdminEndpoints
         return group;
     }
 
+    private static StoreRequest ToStoreRequest(Guid? id, StoreDocumentRequest request, int? expectedVersion = null) =>
+        new(id, request.DirectoryId, request.Name, request.Summary, request.Tags, request.Content, expectedVersion);
+
+    private static StoreDocumentResponse ToResponse(StoreResult result) =>
+        new(result.Id, result.DirectoryId, result.Name, result.Version, result.Created);
+
     private static RouteGroupBuilder MapAdminGroup(WebApplication app, string pattern) =>
         app.MapGroup(pattern)
             .AddEndpointFilter(async (context, next) =>
@@ -71,7 +164,7 @@ public static class AdminEndpoints
             });
 
     private static CreateKeyScope ToDto(KeyScope scope) =>
-        new(scope.DirectoryId, scope.Access.ToString());
+        new(scope.DirectoryId, scope.Access.ToString().ToLowerInvariant());
 
     private static bool IsAdmin(HttpRequest request, string expectedToken)
     {

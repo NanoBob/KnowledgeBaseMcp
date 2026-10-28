@@ -38,6 +38,26 @@ public sealed record StoreRequest(
 
 public sealed record StoreResult(Guid Id, Guid DirectoryId, string Name, int Version, bool Created);
 
+public sealed record RevisionSummary(
+    Guid Id,
+    Guid DocumentId,
+    int Version,
+    string Name,
+    DateTime ChangedAt,
+    string ChangedBy);
+
+public sealed record RevisionDetail(
+    Guid Id,
+    Guid DocumentId,
+    Guid DirectoryId,
+    int Version,
+    string Name,
+    string Summary,
+    IReadOnlyList<string> Tags,
+    string Content,
+    DateTime ChangedAt,
+    string ChangedBy);
+
 public sealed class KnowledgeService(IDocumentRepository documents, IDirectoryRepository directories)
 {
     public async Task<IReadOnlyList<DocumentSummary>> ListAsync(
@@ -86,6 +106,64 @@ public sealed class KnowledgeService(IDocumentRepository documents, IDirectoryRe
             document.UpdatedAt,
             document.CreatedBy,
             document.UpdatedBy);
+    }
+
+    public async Task DeleteAsync(ApiCaller caller, Guid id, CancellationToken ct)
+    {
+        var document = await documents.FindAsync(id, ct);
+        if (document is null || !caller.CanRead(document.DirectoryId))
+        {
+            throw KnowledgeException.NotFound($"document '{id}' was not found.");
+        }
+
+        if (!caller.CanWrite(document.DirectoryId))
+        {
+            throw KnowledgeException.Forbidden("this key cannot write to the document's directory.");
+        }
+
+        await documents.DeleteRevisionsAsync(id, ct);
+        if (!await documents.DeleteAsync(id, ct))
+        {
+            throw KnowledgeException.NotFound($"document '{id}' was not found.");
+        }
+    }
+
+    public async Task<IReadOnlyList<RevisionSummary>> ListRevisionsAsync(
+        ApiCaller caller,
+        Guid documentId,
+        CancellationToken ct)
+    {
+        var document = await documents.FindAsync(documentId, ct);
+        if (document is null || !caller.CanRead(document.DirectoryId))
+        {
+            throw KnowledgeException.NotFound($"document '{documentId}' was not found.");
+        }
+
+        var revisions = await documents.ListRevisionsAsync(documentId, ct);
+        return revisions
+            .Select(r => new RevisionSummary(r.Id, r.DocumentId, r.Version, r.Name, r.ChangedAt, r.ChangedBy))
+            .ToList();
+    }
+
+    public async Task<RevisionDetail> GetRevisionAsync(ApiCaller caller, Guid revisionId, CancellationToken ct)
+    {
+        var revision = await documents.FindRevisionAsync(revisionId, ct);
+        if (revision is null || !caller.CanRead(revision.DirectoryId))
+        {
+            throw KnowledgeException.NotFound($"revision '{revisionId}' was not found.");
+        }
+
+        return new RevisionDetail(
+            revision.Id,
+            revision.DocumentId,
+            revision.DirectoryId,
+            revision.Version,
+            revision.Name,
+            revision.Summary,
+            revision.Tags,
+            revision.Content,
+            revision.ChangedAt,
+            revision.ChangedBy);
     }
 
     public async Task<StoreResult> StoreAsync(ApiCaller caller, StoreRequest request, CancellationToken ct)

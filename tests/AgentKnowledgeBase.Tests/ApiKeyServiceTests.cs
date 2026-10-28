@@ -7,12 +7,13 @@ public class ApiKeyServiceTests
 {
     private readonly FakeApiKeyRepository _repo = new();
     private readonly FakeDirectoryRepository _directoryRepo = new();
+    private readonly FakeDocumentRepository _documentRepo = new();
     private readonly DirectoryService _directories;
     private readonly ApiKeyService _service;
 
     public ApiKeyServiceTests()
     {
-        _directories = new DirectoryService(_directoryRepo);
+        _directories = new DirectoryService(_directoryRepo, _documentRepo);
         _service = new ApiKeyService(_repo, _directoryRepo);
     }
 

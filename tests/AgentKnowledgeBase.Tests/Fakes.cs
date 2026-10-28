@@ -24,6 +24,27 @@ public sealed class FakeDirectoryRepository : IDirectoryRepository
         return Task.FromResult(true);
     }
 
+    public Task<bool> TryUpdateAsync(KnowledgeDocumentDirectory directory, CancellationToken ct)
+    {
+        if (!Directories.ContainsKey(directory.Id))
+        {
+            return Task.FromResult(false);
+        }
+
+        if (Directories.Values.Any(d =>
+                d.Id != directory.Id
+                && string.Equals(d.Name, directory.Name, StringComparison.OrdinalIgnoreCase)))
+        {
+            return Task.FromResult(false);
+        }
+
+        Directories[directory.Id] = Clone(directory);
+        return Task.FromResult(true);
+    }
+
+    public Task<bool> DeleteAsync(Guid id, CancellationToken ct) =>
+        Task.FromResult(Directories.Remove(id));
+
     private static KnowledgeDocumentDirectory Clone(KnowledgeDocumentDirectory d) => new()
     {
         Id = d.Id,
@@ -78,11 +99,47 @@ public sealed class FakeDocumentRepository : IDocumentRepository
         return Task.CompletedTask;
     }
 
+    public Task<bool> DeleteAsync(Guid id, CancellationToken ct) =>
+        Task.FromResult(Documents.Remove(id));
+
+    public Task<int> CountByDirectoryAsync(Guid directoryId, CancellationToken ct) =>
+        Task.FromResult(Documents.Values.Count(d => d.DirectoryId == directoryId));
+
+    public Task<List<KnowledgeDocumentRevision>> ListRevisionsAsync(Guid documentId, CancellationToken ct) =>
+        Task.FromResult(Revisions
+            .Where(r => r.DocumentId == documentId)
+            .OrderByDescending(r => r.Version)
+            .Select(CloneRevisionSummary)
+            .ToList());
+
+    public Task<KnowledgeDocumentRevision?> FindRevisionAsync(Guid revisionId, CancellationToken ct) =>
+        Task.FromResult(Revisions.FirstOrDefault(r => r.Id == revisionId));
+
+    public Task DeleteRevisionsAsync(Guid documentId, CancellationToken ct)
+    {
+        Revisions.RemoveAll(r => r.DocumentId == documentId);
+        return Task.CompletedTask;
+    }
+
     private bool HasName(Guid directoryId, string name, Guid? exceptId) =>
         Documents.Values.Any(d =>
             d.DirectoryId == directoryId
             && d.Id != exceptId
             && string.Equals(d.Name, name, StringComparison.OrdinalIgnoreCase));
+
+    private static KnowledgeDocumentRevision CloneRevisionSummary(KnowledgeDocumentRevision r) => new()
+    {
+        Id = r.Id,
+        DocumentId = r.DocumentId,
+        DirectoryId = r.DirectoryId,
+        Version = r.Version,
+        Name = r.Name,
+        Summary = r.Summary,
+        Tags = [.. r.Tags],
+        Content = "",
+        ChangedAt = r.ChangedAt,
+        ChangedBy = r.ChangedBy
+    };
 
     private static KnowledgeDocument Clone(KnowledgeDocument d) => new()
     {

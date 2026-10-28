@@ -12,7 +12,7 @@ public class KnowledgeServiceTests
 
     public KnowledgeServiceTests()
     {
-        _directories = new DirectoryService(_directoryRepo);
+        _directories = new DirectoryService(_directoryRepo, _repo);
         _service = new KnowledgeService(_repo, _directoryRepo);
     }
 
@@ -297,5 +297,99 @@ public class KnowledgeServiceTests
             _service.StoreAsync(Caller(Rw(directoryId)), Create(directoryId, " "), default));
 
         Assert.Equal(KnowledgeErrorKind.Validation, ex.Kind);
+    }
+
+    [Fact]
+    public async Task Delete_RemovesDocumentAndItsRevisions()
+    {
+        var directoryId = await CreateDirectoryAsync();
+        var caller = Caller(Rw(directoryId));
+        var created = await _service.StoreAsync(caller, Create(directoryId, "Doc"), default);
+
+        await _service.DeleteAsync(caller, created.Id, default);
+
+        Assert.Empty(_repo.Documents);
+        Assert.Empty(_repo.Revisions);
+    }
+
+    [Fact]
+    public async Task Delete_OfHiddenDocument_LooksMissing()
+    {
+        var privateId = await CreateDirectoryAsync("private");
+        var created = await _service.StoreAsync(Caller(Rw(privateId)), Create(privateId, "Secret"), default);
+
+        var ex = await Assert.ThrowsAsync<KnowledgeException>(() =>
+            _service.DeleteAsync(Caller(Rw(Guid.NewGuid())), created.Id, default));
+
+        Assert.Equal(KnowledgeErrorKind.NotFound, ex.Kind);
+        Assert.Single(_repo.Documents);
+    }
+
+    [Fact]
+    public async Task Delete_WithReadOnlyAccess_IsForbidden()
+    {
+        var directoryId = await CreateDirectoryAsync();
+        var created = await _service.StoreAsync(Caller(Rw(directoryId)), Create(directoryId, "Doc"), default);
+
+        var ex = await Assert.ThrowsAsync<KnowledgeException>(() =>
+            _service.DeleteAsync(Caller(R(directoryId)), created.Id, default));
+
+        Assert.Equal(KnowledgeErrorKind.Forbidden, ex.Kind);
+    }
+
+    [Fact]
+    public async Task ListRevisions_ReturnsNewestFirst()
+    {
+        var directoryId = await CreateDirectoryAsync();
+        var caller = Caller(Rw(directoryId));
+        var created = await _service.StoreAsync(caller, Create(directoryId, "Doc", "one"), default);
+        await _service.StoreAsync(caller, new StoreRequest(created.Id, null, "Renamed", null, null, "two", 1), default);
+
+        var revisions = await _service.ListRevisionsAsync(caller, created.Id, default);
+
+        Assert.Equal([2, 1], revisions.Select(r => r.Version));
+        Assert.Equal("Renamed", revisions[0].Name);
+        Assert.Equal("Doc", revisions[1].Name);
+    }
+
+    [Fact]
+    public async Task GetRevision_ReturnsSnapshotContent()
+    {
+        var directoryId = await CreateDirectoryAsync();
+        var caller = Caller(Rw(directoryId));
+        var created = await _service.StoreAsync(caller, Create(directoryId, "Doc", "one"), default);
+        await _service.StoreAsync(caller, new StoreRequest(created.Id, null, null, null, null, "two", 1), default);
+        var revisions = await _service.ListRevisionsAsync(caller, created.Id, default);
+        var first = revisions.Single(r => r.Version == 1);
+
+        var detail = await _service.GetRevisionAsync(caller, first.Id, default);
+
+        Assert.Equal("one", detail.Content);
+        Assert.Equal(1, detail.Version);
+    }
+
+    [Fact]
+    public async Task GetRevision_OfHiddenDocument_LooksMissing()
+    {
+        var privateId = await CreateDirectoryAsync("private");
+        var created = await _service.StoreAsync(Caller(Rw(privateId)), Create(privateId, "Secret"), default);
+        var revision = (await _service.ListRevisionsAsync(Caller(Rw(privateId)), created.Id, default)).Single();
+
+        var ex = await Assert.ThrowsAsync<KnowledgeException>(() =>
+            _service.GetRevisionAsync(Caller(Rw(Guid.NewGuid())), revision.Id, default));
+
+        Assert.Equal(KnowledgeErrorKind.NotFound, ex.Kind);
+    }
+
+    [Fact]
+    public async Task AdminCaller_ReachesEveryDirectory()
+    {
+        var directoryId = await CreateDirectoryAsync();
+
+        var created = await _service.StoreAsync(ApiCaller.Admin, Create(directoryId, "Doc"), default);
+        var detail = await _service.GetAsync(ApiCaller.Admin, created.Id, default);
+
+        Assert.Equal("Doc", detail.Name);
+        Assert.Single(await _service.ListAsync(ApiCaller.Admin, null, default));
     }
 }
