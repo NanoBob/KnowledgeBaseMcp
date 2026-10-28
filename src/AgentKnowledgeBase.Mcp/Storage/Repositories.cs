@@ -104,7 +104,9 @@ public sealed class MongoDirectoryRepository(IMongoDatabase database) : IDirecto
         CancellationToken ct) =>
         ids.Count == 0
             ? Task.FromResult(new List<KnowledgeDocumentDirectory>())
-            : _directories.Find(Builders<KnowledgeDocumentDirectory>.Filter.In(d => d.Id, ids)).ToListAsync(ct);
+            : _directories.Find(Builders<KnowledgeDocumentDirectory>.Filter.In(d => d.Id, ids))
+                .SortBy(d => d.Name)
+                .ToListAsync(ct);
 
     public async Task<KnowledgeDocumentDirectory?> FindAsync(Guid id, CancellationToken ct) =>
         await _directories.Find(d => d.Id == id).FirstOrDefaultAsync(ct);

@@ -118,6 +118,18 @@ public class DirectoryServiceTests
     }
 
     [Fact]
+    public async Task List_ForScopedCaller_IsOrderedByName()
+    {
+        var zebra = await _service.CreateAsync("zebra", "", "admin", default);
+        var alpha = await _service.CreateAsync("alpha", "", "admin", default);
+        var mango = await _service.CreateAsync("mango", "", "admin", default);
+
+        var result = await _service.ListAsync(Caller(Rw(zebra.Id), Rw(mango.Id), Rw(alpha.Id)), default);
+
+        Assert.Equal(["alpha", "mango", "zebra"], result.Select(d => d.Name));
+    }
+
+    [Fact]
     public async Task List_ReportsTheCallersAccessLevelPerDirectory()
     {
         var writable = await _service.CreateAsync("writable", "", "admin", default);

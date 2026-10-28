@@ -8,12 +8,12 @@ public sealed class FakeDirectoryRepository : IDirectoryRepository
     public Dictionary<Guid, KnowledgeDocumentDirectory> Directories { get; } = new();
 
     public Task<List<KnowledgeDocumentDirectory>> ListAsync(CancellationToken ct) =>
-        Task.FromResult(Directories.Values.Select(Clone).ToList());
+        Task.FromResult(Ordered(Directories.Values));
 
     public Task<List<KnowledgeDocumentDirectory>> ListByIdsAsync(
         IReadOnlyCollection<Guid> ids,
         CancellationToken ct) =>
-        Task.FromResult(Directories.Values.Where(d => ids.Contains(d.Id)).Select(Clone).ToList());
+        Task.FromResult(Ordered(Directories.Values.Where(d => ids.Contains(d.Id))));
 
     public Task<KnowledgeDocumentDirectory?> FindAsync(Guid id, CancellationToken ct) =>
         Task.FromResult(Directories.TryGetValue(id, out var d) ? Clone(d) : null);
@@ -49,6 +49,10 @@ public sealed class FakeDirectoryRepository : IDirectoryRepository
 
     public Task<bool> DeleteAsync(Guid id, CancellationToken ct) =>
         Task.FromResult(Directories.Remove(id));
+
+    /// <summary>Mirrors the name ordering both Mongo list queries apply, so tests see realistic order.</summary>
+    private static List<KnowledgeDocumentDirectory> Ordered(IEnumerable<KnowledgeDocumentDirectory> directories) =>
+        directories.OrderBy(d => d.Name, StringComparer.Ordinal).Select(Clone).ToList();
 
     private static KnowledgeDocumentDirectory Clone(KnowledgeDocumentDirectory d) => new()
     {

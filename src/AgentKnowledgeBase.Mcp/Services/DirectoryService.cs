@@ -88,12 +88,13 @@ public sealed class DirectoryService(IDirectoryRepository directories, IDocument
     /// <summary>Directories the caller can read, with the access level the caller holds on each.</summary>
     public async Task<IReadOnlyList<DirectoryAccessSummary>> ListAsync(ApiCaller caller, CancellationToken ct)
     {
-        if (caller.ReadableDirectoryIds is { Count: 0 })
+        var readableIds = caller.ReadableDirectoryIds;
+        if (readableIds is { Count: 0 })
         {
             return [];
         }
 
-        var readable = caller.ReadableDirectoryIds is { } ids
+        var readable = readableIds is { } ids
             ? await directories.ListByIdsAsync(ids, ct)
             : await directories.ListAsync(ct);
         var visible = new List<DirectoryAccessSummary>(readable.Count);
