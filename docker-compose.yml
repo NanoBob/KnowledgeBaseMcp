@@ -31,3 +31,4 @@ services:
 
 volumes:
   mongo-data:
+    name: agent-knowledge-base-data
