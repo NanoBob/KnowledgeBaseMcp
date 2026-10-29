@@ -20,6 +20,7 @@ const NO_SELECTION: Selection = { kind: 'none' }
 
 const PREVIEW_KEY = 'akb.editorPreview'
 const COLLAPSED_KEY = 'akb.collapsedDirectories'
+const COMPACT_KEY = 'akb.compactFileList'
 
 // localStorage throws in private modes and when storage is full, and a preference is not worth
 // breaking the editor over.
@@ -92,14 +93,6 @@ function LoadingEditor({ name, version }: { name?: string; version?: number }) {
         </Field>
       </div>
 
-      <Field label="Content" className="content-field" hint="Markdown. Max 100 KB per version.">
-        <div className="skeleton-content">
-          {[92, 78, 86, 61, 88, 70, 44].map((width, line) => (
-            <Skeleton key={line} className="skeleton-line" style={{ width: `${width}%` }} />
-          ))}
-        </div>
-      </Field>
-
       <div className="editor-actions">
         <button type="button" className="primary" disabled>
           Save
@@ -114,6 +107,14 @@ function LoadingEditor({ name, version }: { name?: string; version?: number }) {
           Delete
         </button>
       </div>
+
+      <Field label="Content" className="content-field" hint="Markdown. Max 100 KB per version.">
+        <div className="skeleton-content">
+          {[92, 78, 86, 61, 88, 70, 44].map((width, line) => (
+            <Skeleton key={line} className="skeleton-line" style={{ width: `${width}%` }} />
+          ))}
+        </div>
+      </Field>
     </div>
   )
 }
@@ -140,6 +141,7 @@ export function DocumentsPanel({ directories, documents, notifier, onChanged }: 
   const [failedId, setFailedId] = useState<string | null>(null)
   const [attempt, setAttempt] = useState(0)
   const [showPreview, setShowPreview] = useState(() => readFlag(PREVIEW_KEY))
+  const [compact, setCompact] = useState(() => readFlag(COMPACT_KEY))
   const [collapsed, setCollapsed] = useState<string[]>(() => {
     try {
       const stored: unknown = JSON.parse(window.localStorage.getItem(COLLAPSED_KEY) ?? '[]')
@@ -157,6 +159,10 @@ export function DocumentsPanel({ directories, documents, notifier, onChanged }: 
   useEffect(() => {
     writeStored(COLLAPSED_KEY, JSON.stringify(collapsed))
   }, [collapsed])
+
+  useEffect(() => {
+    writeStored(COMPACT_KEY, compact ? '1' : '0')
+  }, [compact])
 
   const selectedId = selection.kind === 'document' ? selection.id : null
   // Derived from state rather than a fetch flag so the skeleton is up on the very first paint.
@@ -422,6 +428,15 @@ export function DocumentsPanel({ directories, documents, notifier, onChanged }: 
               placeholder="Search documents"
               aria-label="Search documents"
             />
+            <button
+              type="button"
+              className={compact ? 'list-mode active' : 'list-mode'}
+              onClick={() => setCompact((value) => !value)}
+              aria-pressed={compact}
+              title={compact ? 'Switch to detailed list' : 'Switch to compact file list'}
+            >
+              Compact
+            </button>
             <button type="button" className="primary" onClick={startCreate} disabled={directories.length === 0}>
               New
             </button>
@@ -453,22 +468,27 @@ export function DocumentsPanel({ directories, documents, notifier, onChanged }: 
                       group.documents.length === 0 ? (
                         <p className="doc-group-empty">No documents</p>
                       ) : (
-                        <ul className="doc-list">
+                        <ul className={compact ? 'doc-list compact' : 'doc-list'}>
                           {group.documents.map((document) => (
                             <li key={document.id}>
                               <button
                                 type="button"
                                 className={document.id === selectedId ? 'doc-item active' : 'doc-item'}
                                 onClick={() => setSelection({ kind: 'document', id: document.id })}
+                                title={compact ? document.summary || undefined : undefined}
                               >
                                 <span className="doc-name">{document.name}</span>
-                                <span className="doc-meta">
-                                  <span className="pill">v{document.version}</span>
-                                  {document.tags.length > 0 ? <span>{document.tags.join(', ')}</span> : null}
-                                </span>
-                                {document.summary.length > 0 ? (
-                                  <span className="doc-summary">{document.summary}</span>
-                                ) : null}
+                                {compact ? null : (
+                                  <>
+                                    <span className="doc-meta">
+                                      <span className="pill">v{document.version}</span>
+                                      {document.tags.length > 0 ? <span>{document.tags.join(', ')}</span> : null}
+                                    </span>
+                                    {document.summary.length > 0 ? (
+                                      <span className="doc-summary">{document.summary}</span>
+                                    ) : null}
+                                  </>
+                                )}
                               </button>
                             </li>
                           ))}
@@ -538,33 +558,6 @@ export function DocumentsPanel({ directories, documents, notifier, onChanged }: 
                 </Field>
               </div>
 
-              <Field
-                label="Content"
-                className="content-field"
-                hint="Markdown. Max 100 KB per version."
-                actions={
-                  <button
-                    type="button"
-                    onClick={() => setShowPreview((open) => !open)}
-                    aria-pressed={showPreview}
-                    title="Toggle the rendered markdown sidebar"
-                  >
-                    {showPreview ? 'Hide preview' : 'Show preview'}
-                  </button>
-                }
-              >
-                <div className={showPreview ? 'content-shell previewing' : 'content-shell'}>
-                  <textarea
-                    className="content"
-                    value={draft.content}
-                    onChange={(event) => setDraft({ ...draft, content: event.target.value })}
-                    spellCheck={false}
-                    placeholder={'# Heading\n\nWrite markdown here…'}
-                  />
-                  {showPreview ? <Markdown source={draft.content} /> : null}
-                </div>
-              </Field>
-
               <div className="editor-actions">
                 <button type="submit" className="primary" disabled={busy}>
                   {busy ? 'Saving…' : 'Save'}
@@ -617,6 +610,33 @@ export function DocumentsPanel({ directories, documents, notifier, onChanged }: 
                   )}
                 </div>
               ) : null}
+
+              <Field
+                label="Content"
+                className="content-field"
+                hint="Markdown. Max 100 KB per version."
+                actions={
+                  <button
+                    type="button"
+                    onClick={() => setShowPreview((open) => !open)}
+                    aria-pressed={showPreview}
+                    title="Toggle the rendered markdown sidebar"
+                  >
+                    {showPreview ? 'Hide preview' : 'Show preview'}
+                  </button>
+                }
+              >
+                <div className={showPreview ? 'content-shell previewing' : 'content-shell'}>
+                  <textarea
+                    className="content"
+                    value={draft.content}
+                    onChange={(event) => setDraft({ ...draft, content: event.target.value })}
+                    spellCheck={false}
+                    placeholder={'# Heading\n\nWrite markdown here…'}
+                  />
+                  {showPreview ? <Markdown source={draft.content} /> : null}
+                </div>
+              </Field>
             </form>
           )}
         </section>

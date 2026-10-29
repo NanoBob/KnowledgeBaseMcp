@@ -733,8 +733,13 @@ main {
 
 .list-toolbar {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: 1fr auto auto;
   gap: 8px;
+}
+
+.list-mode.active {
+  border-color: var(--accent);
+  background: rgb(79 157 255 / 12%);
 }
 
 .list-toolbar select {
@@ -852,6 +857,45 @@ main {
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
+}
+
+/* Compact mode renders documents as single file-browser style lines. */
+.doc-list.compact {
+  gap: 1px;
+  margin-left: 4px;
+  padding-left: 6px;
+}
+
+.doc-list.compact .doc-item {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 7px;
+  background: transparent;
+  border-color: transparent;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.doc-list.compact .doc-item:hover {
+  background: var(--surface-2);
+}
+
+.doc-list.compact .doc-item.active {
+  background: rgb(79 157 255 / 14%);
+  border-color: transparent;
+}
+
+.doc-list.compact .doc-name {
+  font-weight: 400;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.doc-list.compact .doc-item.active .doc-name {
+  font-weight: 600;
 }
 
 .editor-pane {
