@@ -10,7 +10,9 @@ import type {
   StoreDocumentResult,
 } from './types'
 
-const BASE: string = import.meta.env.VITE_API_BASE ?? ''
+// The dev server talks to the API directly; a production build defaults to the origin that serves it.
+const BASE: string =
+  import.meta.env.VITE_API_BASE ?? (import.meta.env.DEV ? 'http://localhost:8080' : '')
 const TOKEN_STORAGE_KEY = 'akb.adminToken'
 
 export class ApiError extends Error {

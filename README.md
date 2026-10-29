@@ -161,7 +161,7 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:5173` and paste the admin token; it is kept in `localStorage` and sent as `X-Admin-Token`. The dev server proxies `/admin` and `/health` to `http://localhost:8080`, so no CORS setup is needed. Point it elsewhere with `AKB_API_URL`, or call the API directly by setting `VITE_API_BASE` in `Frontend/.env` — the server allows the origins in `Frontend:Origins` (`http://localhost:5173` and `http://localhost:4173` by default).
+Open `http://localhost:5173` and paste the admin token; it is kept in `localStorage` and sent as `X-Admin-Token`. The dev server calls the API directly at `http://localhost:8080`, which the server allows through CORS for the origins in `Frontend:Origins` (`http://localhost:5173` and `http://localhost:4173` by default) — add any other UI origin there. Override the API URL with `VITE_API_BASE` in `Frontend/.env`.
 
 Errors and confirmations appear as dismissible toasts stacked in the bottom-right corner, so they stay visible wherever you have scrolled and above any open dialog.
 
