@@ -6,14 +6,22 @@ using Microsoft.Extensions.Options;
 
 namespace AgentKnowledgeBase.Mcp.Admin.Controllers;
 
+/// <summary>Exports and imports the knowledge base as a zip archive.</summary>
 [ApiController]
 [AdminToken]
 [Route("admin/transfer")]
+[ProducesResponseType(typeof(AdminErrorResponse), StatusCodes.Status400BadRequest, AdminMediaTypes.Json)]
+[ProducesResponseType(typeof(AdminErrorResponse), StatusCodes.Status401Unauthorized, AdminMediaTypes.Json)]
+[ProducesResponseType(typeof(AdminErrorResponse), StatusCodes.Status500InternalServerError, AdminMediaTypes.Json)]
 public sealed class TransferController(
     DocumentTransferService service,
     IOptions<TransferOptions> options) : ControllerBase
 {
+    /// <summary>Streams the selected directories and their documents as a zip archive.</summary>
+    /// <remarks>An empty or omitted <c>directoryIds</c> exports every directory.</remarks>
+    /// <response code="200">The zip archive, sent as an attachment.</response>
     [HttpPost("export")]
+    [ProducesResponseType(typeof(byte[]), StatusCodes.Status200OK, AdminMediaTypes.Zip)]
     public async Task<IActionResult> Export([FromBody] ExportDocumentsRequest request, CancellationToken ct)
     {
         var plan = await service.PlanExportAsync(request.DirectoryIds, ct);
@@ -33,11 +41,19 @@ public sealed class TransferController(
         return new EmptyResult();
     }
 
+    /// <summary>Imports a zip archive produced by the export action.</summary>
+    /// <remarks>
+    /// The archive is sent as multipart/form-data in the <c>file</c> field and is bounded by
+    /// <c>Transfer:MaxArchiveBytes</c>. <c>conflict</c> decides what happens to a document that already
+    /// exists: <c>overwrite</c> (the default), <c>skip</c> or <c>fail</c>.
+    /// </remarks>
     // The archive is read through the request body so the configured limit can replace the framework
     // default; DocumentTransferService still enforces the exact MaxArchiveBytes bound on the zip itself.
     // The form is read manually because model binding would read it before the size limit is applied and
     // would turn an oversized or malformed body into an unhandled exception instead of a validation error.
     [HttpPost("import")]
+    [Consumes("multipart/form-data")]
+    [ProducesResponseType(typeof(ImportDocumentsResponse), StatusCodes.Status200OK, AdminMediaTypes.Json)]
     public async Task<IActionResult> Import([FromQuery] string? conflict, CancellationToken ct)
     {
         var maxArchiveBytes = options.Value.MaxArchiveBytes;

@@ -1,5 +1,12 @@
 namespace AgentKnowledgeBase.Mcp.Admin;
 
+/// <summary>
+/// The body the exception handler writes for a failed admin call. <c>kind</c> is one of
+/// <c>validation</c>, <c>notfound</c>, <c>forbidden</c>, <c>conflict</c> or <c>internal</c>, and
+/// <c>latestVersion</c> is only set for a stale expected version.
+/// </summary>
+public sealed record AdminErrorResponse(string? Error, string? Kind, int? LatestVersion);
+
 public sealed record CreateApiKeyRequest(string? Name, List<CreateKeyScope>? Scopes);
 
 public sealed record CreateKeyScope(Guid? DirectoryId, string? Access);

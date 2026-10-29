@@ -1,4 +1,5 @@
 using AgentKnowledgeBase.Mcp;
+using AgentKnowledgeBase.Mcp.Admin;
 using AgentKnowledgeBase.Mcp.Auth;
 using AgentKnowledgeBase.Mcp.Domain;
 using AgentKnowledgeBase.Mcp.Mcp;
@@ -64,6 +65,7 @@ builder.Services.AddControllers(options =>
         }
     }
 });
+builder.Services.AddAdminOpenApi();
 builder.Services.AddMcpServer()
     .WithHttpTransport()
     .WithTools<KnowledgeTools>();
@@ -100,6 +102,16 @@ app.UseExceptionHandler(errorApp => errorApp.Run(async context =>
 app.UseCors();
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
+
+app.MapOpenApi();
+app.UseSwaggerUI(options =>
+{
+    options.RoutePrefix = "swagger";
+    options.DocumentTitle = "Agent Knowledge Base Admin API";
+    options.SwaggerEndpoint(AdminOpenApi.DocumentPath, "Agent Knowledge Base Admin API");
+    // Keeps the admin token that was pasted into "Authorize" while the page is reloaded.
+    options.EnablePersistAuthorization();
+});
 
 app.UseWhen(
     context => context.Request.Path.StartsWithSegments("/mcp"),
