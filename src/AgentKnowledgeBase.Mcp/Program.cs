@@ -1,11 +1,11 @@
 using AgentKnowledgeBase.Mcp;
-using AgentKnowledgeBase.Mcp.Admin;
 using AgentKnowledgeBase.Mcp.Auth;
 using AgentKnowledgeBase.Mcp.Domain;
 using AgentKnowledgeBase.Mcp.Mcp;
 using AgentKnowledgeBase.Mcp.Services;
 using AgentKnowledgeBase.Mcp.Storage;
 using Microsoft.AspNetCore.Diagnostics;
+using Microsoft.AspNetCore.Mvc.ModelBinding;
 using Microsoft.Extensions.Options;
 using MongoDB.Driver;
 
@@ -49,6 +49,21 @@ builder.Services.AddCors(options => options.AddDefaultPolicy(policy =>
     policy.WithOrigins(allowedOrigins).AllowAnyHeader().AllowAnyMethod()));
 
 builder.Services.AddScoped<CallerContext>();
+builder.Services.AddControllers(options =>
+{
+    // The transfer import action reads the form itself so the configured archive limit is applied before
+    // the body is buffered. MVC's form providers would read the form first, which both defeats that limit
+    // and turns a malformed body into a model-state error instead of the documented validation error.
+    for (var i = options.ValueProviderFactories.Count - 1; i >= 0; i--)
+    {
+        if (options.ValueProviderFactories[i] is FormValueProviderFactory
+            or FormFileValueProviderFactory
+            or JQueryFormValueProviderFactory)
+        {
+            options.ValueProviderFactories.RemoveAt(i);
+        }
+    }
+});
 builder.Services.AddMcpServer()
     .WithHttpTransport()
     .WithTools<KnowledgeTools>();
@@ -91,7 +106,7 @@ app.UseWhen(
     branch => branch.UseMiddleware<ApiKeyAuthMiddleware>());
 
 app.MapMcp("/mcp");
-app.MapAdminApi();
+app.MapControllers();
 
 app.Run();
 

@@ -61,6 +61,38 @@ interface ErrorBody {
   error?: string
   kind?: string
   latestVersion?: number | null
+  // ProblemDetails shape emitted by MVC model validation failures.
+  title?: string
+  detail?: string
+  extensions?: { kind?: string; latestVersion?: number | null }
+  errors?: Record<string, string[]>
+}
+
+interface DescribedError {
+  message: string | undefined
+  kind: string | undefined
+  latestVersion: number | null
+}
+
+function describeErrorBody(body: ErrorBody): DescribedError {
+  const kind = body.kind ?? body.extensions?.kind
+  const latestVersion = body.latestVersion ?? body.extensions?.latestVersion ?? null
+
+  const fieldErrors = body.errors
+    ? Object.entries(body.errors).flatMap(([field, messages]) =>
+        (messages ?? []).map((text) => `${field}: ${text}`),
+      )
+    : []
+
+  if (fieldErrors.length > 0) {
+    return {
+      message: `${body.title ?? 'The request was rejected.'} ${fieldErrors.join(' ')}`,
+      kind,
+      latestVersion,
+    }
+  }
+
+  return { message: body.error ?? body.detail ?? body.title, kind, latestVersion }
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -76,9 +108,10 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     let latestVersion: number | null = null
     try {
       const body = (await response.json()) as ErrorBody
-      if (body.error) message = body.error
-      kind = body.kind
-      latestVersion = body.latestVersion ?? null
+      const described = describeErrorBody(body)
+      if (described.message) message = described.message
+      kind = described.kind
+      latestVersion = described.latestVersion
     } catch {
       // Non-JSON error body, keep the status message.
     }
