@@ -21,6 +21,11 @@ builder.Services.AddOptions<AdminOptions>()
     .ValidateDataAnnotations()
     .ValidateOnStart();
 
+builder.Services.AddOptions<TransferOptions>()
+    .Bind(builder.Configuration.GetSection("Transfer"))
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
+
 builder.Services.AddSingleton<IMongoClient>(sp =>
     new MongoClient(sp.GetRequiredService<IOptions<MongoOptions>>().Value.ConnectionString));
 builder.Services.AddSingleton<IMongoDatabase>(sp =>
@@ -31,6 +36,7 @@ builder.Services.AddSingleton<IDocumentRepository, MongoDocumentRepository>();
 builder.Services.AddSingleton<IApiKeyRepository, MongoApiKeyRepository>();
 builder.Services.AddSingleton<DirectoryService>();
 builder.Services.AddSingleton<KnowledgeService>();
+builder.Services.AddSingleton<DocumentTransferService>();
 builder.Services.AddSingleton<ApiKeyService>();
 builder.Services.AddHostedService<MongoIndexInitializer>();
 

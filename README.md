@@ -104,12 +104,44 @@ Every call needs the admin token in an `X-Admin-Token` header (or `Authorization
 | `POST` | `/admin/api-keys/{id}/regenerate` | Issue a new secret for the same key and scopes; the old secret stops working. Returns the new plaintext once. |
 | `PUT` | `/admin/api-keys/{id}/scopes` | Replace a key's directory scopes in place, keeping its secret. |
 | `DELETE` | `/admin/api-keys/{id}` | Revoke a key. This takes effect on the next request. |
+| `POST` | `/admin/transfer/export` | Download a `.zip` with the documents of `{ directoryIds }`. |
+| `POST` | `/admin/transfer/import` | Upload a `.zip` as `multipart/form-data` in the `file` field; `?conflict=overwrite\|skip\|fail` (default `overwrite`). |
 
 `PUT /admin/documents/{id}` accepts an optional `expectedVersion`. Omit it to overwrite whatever is stored, or send the version you last read to get a `409` when someone else changed the document first.
 
 `POST /admin/documents` rejects a request that carries `expectedVersion` with a `404`, because a create has no prior version to compare against. Omit it to create the document.
 
 `POST /admin/documents/{id}/move` keeps the document's name, content and revision history, so the name must be free in the target directory; it bumps the version and records a revision that carries the new `directoryId`.
+
+### Exporting and importing
+
+`POST /admin/transfer/export` takes `{ "directoryIds": ["…"] }` and returns a `.zip` holding `manifest.json` plus one `.md` file per document, filed under a folder named after its directory:
+
+```
+manifest.json
+dotnet/async-await.md
+dotnet/minimal-apis.md
+team/onboarding.md
+```
+
+The manifest carries the directory descriptions and each document's `name`, `summary` and `tags`, so a round trip restores names, summaries, tags and content. Ids, versions, timestamps and authors belong to the target knowledge base and are not carried. Empty directories are listed too, so they survive a round trip. The archive is streamed, so an export never holds the whole `.zip` in memory; `Transfer:MaxExportDocuments` (default `100000`) caps how many documents one export may contain. Because the status line and headers go out before the first byte of the archive, a failure while streaming (a database error, say) reaches the client as a truncated `200` zip rather than an error response.
+
+`POST /admin/transfer/import` accepts that archive back. Directories that do not exist are created, an existing directory's description is updated from the manifest, and each document is stored with a new revision. `conflict` decides what happens when a document with the same name already exists in the directory: `overwrite` (default) replaces it, `skip` keeps the stored document, and `fail` rejects the whole import with a `409` before anything is written. The import is not transactional, so a failure part way through `overwrite` or `skip` leaves the documents already written in place. The response reports the counts:
+
+```json
+{ "directoriesCreated": 1, "documentsCreated": 2, "documentsUpdated": 0, "documentsSkipped": 0 }
+```
+
+An archive without a `manifest.json` is also accepted: every `.md` file is imported into a directory named after the folder that holds it, with the document name taken from the file name (sub-folders become part of the name). Folder names are slugified to fit the directory rules, so `Team Docs` becomes `team-docs` and `Café` becomes `cafe`; two folders that slugify to the same name are rejected. A folder name with no ASCII letters or digits left after slugifying (a Chinese or Japanese name, for example) has no usable directory name, so such an archive is rejected and needs a manifest. Such documents get an empty summary and no tags. A `.md` file that sits outside any folder has no directory to belong to, so an archive containing one is rejected rather than silently dropping it.
+
+```bash
+curl -X POST http://localhost:8080/admin/transfer/export \
+  -H "X-Admin-Token: $ADMIN_TOKEN" -H "Content-Type: application/json" \
+  -d '{"directoryIds":["<directory-id>"]}' -o knowledge.zip
+
+curl -X POST "http://localhost:8080/admin/transfer/import?conflict=skip" \
+  -H "X-Admin-Token: $ADMIN_TOKEN" -F "file=@knowledge.zip"
+```
 
 Errors come back as JSON with an HTTP status that matches the failure:
 

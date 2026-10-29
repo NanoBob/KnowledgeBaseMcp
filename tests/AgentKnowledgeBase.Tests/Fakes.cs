@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Runtime.CompilerServices;
 using AgentKnowledgeBase.Mcp.Domain;
 using AgentKnowledgeBase.Mcp.Storage;
 
@@ -66,6 +68,10 @@ public sealed class FakeDirectoryRepository : IDirectoryRepository
 
 public sealed class FakeDocumentRepository : IDocumentRepository
 {
+    /// <summary>Mirrors the ICU 'en' secondary collation the document name index is built with.</summary>
+    private static readonly StringComparer NameComparer =
+        StringComparer.Create(CultureInfo.GetCultureInfo("en"), CompareOptions.IgnoreCase);
+
     public Dictionary<Guid, KnowledgeDocument> Documents { get; } = new();
     public List<KnowledgeDocumentRevision> Revisions { get; } = [];
 
@@ -74,11 +80,50 @@ public sealed class FakeDocumentRepository : IDocumentRepository
         CancellationToken ct) =>
         Task.FromResult(Documents.Values
             .Where(d => directoryIds is null || directoryIds.Contains(d.DirectoryId))
-            .Select(Clone)
+            .Select(Summary)
             .ToList());
+
+    /// <summary>Mongo projects the content out of a summary query; the fake does too, so a planner that reads
+    /// content from a summary fails here instead of only in production.</summary>
+    private static KnowledgeDocument Summary(KnowledgeDocument d) => new()
+    {
+        Id = d.Id,
+        DirectoryId = d.DirectoryId,
+        Name = d.Name,
+        Summary = d.Summary,
+        Tags = [.. d.Tags],
+        Content = "",
+        Version = d.Version,
+        CreatedAt = d.CreatedAt,
+        UpdatedAt = d.UpdatedAt,
+        CreatedBy = d.CreatedBy,
+        UpdatedBy = d.UpdatedBy
+    };
 
     public Task<KnowledgeDocument?> FindAsync(Guid id, CancellationToken ct) =>
         Task.FromResult(Documents.TryGetValue(id, out var d) ? Clone(d) : null);
+
+    public async IAsyncEnumerable<KnowledgeDocument> StreamByDirectoryIdsAsync(
+        IReadOnlyCollection<Guid>? directoryIds,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        await Task.Yield();
+
+        foreach (var document in Documents.Values
+                     .Where(d => directoryIds is null || directoryIds.Contains(d.DirectoryId))
+                     .Select(Clone)
+                     .ToList())
+        {
+            ct.ThrowIfCancellationRequested();
+            yield return document;
+        }
+    }
+
+    public Task<KnowledgeDocument?> FindByNameAsync(Guid directoryId, string name, CancellationToken ct) =>
+        Task.FromResult(Documents.Values
+            .Where(d => d.DirectoryId == directoryId && NameComparer.Equals(d.Name, name))
+            .Select(Clone)
+            .FirstOrDefault());
 
     public Task<bool> TryInsertAsync(KnowledgeDocument document, CancellationToken ct)
     {
@@ -139,7 +184,7 @@ public sealed class FakeDocumentRepository : IDocumentRepository
         Documents.Values.Any(d =>
             d.DirectoryId == directoryId
             && d.Id != exceptId
-            && string.Equals(d.Name, name, StringComparison.OrdinalIgnoreCase));
+            && NameComparer.Equals(d.Name, name));
 
     private static KnowledgeDocumentRevision CloneRevisionSummary(KnowledgeDocumentRevision r) => new()
     {

@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using AgentKnowledgeBase.Mcp.Domain;
 using AgentKnowledgeBase.Mcp.Services;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.Extensions.Options;
 
 namespace AgentKnowledgeBase.Mcp.Admin;
@@ -35,6 +36,14 @@ public sealed record StoreDocumentResponse(Guid Id, Guid DirectoryId, string Nam
 
 public sealed record MoveDocumentRequest(Guid? DirectoryId, int? ExpectedVersion);
 
+public sealed record ExportDocumentsRequest(List<Guid>? DirectoryIds);
+
+public sealed record ImportDocumentsResponse(
+    int DirectoriesCreated,
+    int DocumentsCreated,
+    int DocumentsUpdated,
+    int DocumentsSkipped);
+
 
 public static class AdminEndpoints
 {
@@ -42,6 +51,7 @@ public static class AdminEndpoints
     {
         MapDirectories(app);
         MapDocuments(app);
+        MapTransfer(app);
         MapRevisions(app);
         return MapApiKeys(app);
     }
@@ -135,6 +145,91 @@ public static class AdminEndpoints
         });
     }
 
+    private static void MapTransfer(WebApplication app)
+    {
+        var transfer = MapAdminGroup(app, "/admin/transfer");
+
+        transfer.MapPost("/export", async (
+            ExportDocumentsRequest request,
+            DocumentTransferService service,
+            HttpResponse response,
+            CancellationToken ct) =>
+        {
+            var plan = await service.PlanExportAsync(request.DirectoryIds, ct);
+
+            response.ContentType = "application/zip";
+            response.Headers.ContentDisposition =
+                $"attachment; filename=\"knowledge-export-{plan.ExportedAt:yyyyMMddTHHmmssZ}.zip\"";
+
+            // ZipArchive writes entry headers and the central directory synchronously, so the response stream
+            // has to allow it while the archive is streamed out.
+            if (response.HttpContext.Features.Get<IHttpBodyControlFeature>() is { } bodyControl)
+            {
+                bodyControl.AllowSynchronousIO = true;
+            }
+
+            await service.WriteArchiveAsync(plan, response.Body, ct);
+            return Results.Empty;
+        });
+
+        // The archive is read through the request body so the configured limit can replace the framework
+        // default; DocumentTransferService still enforces the exact MaxArchiveBytes bound on the zip itself.
+        transfer.MapPost("/import", async (
+            HttpRequest request,
+            string? conflict,
+            DocumentTransferService service,
+            IOptions<TransferOptions> options,
+            CancellationToken ct) =>
+        {
+            var maxArchiveBytes = options.Value.MaxArchiveBytes;
+
+            var sizeFeature = request.HttpContext.Features.Get<IHttpMaxRequestBodySizeFeature>();
+            if (sizeFeature is { IsReadOnly: false })
+            {
+                sizeFeature.MaxRequestBodySize = maxArchiveBytes + (1024 * 1024);
+            }
+
+            if (!request.HasFormContentType)
+            {
+                throw KnowledgeException.Validation(
+                    "send the archive as multipart/form-data with the zip in the 'file' field.");
+            }
+
+            IFormCollection form;
+            try
+            {
+                form = await request.ReadFormAsync(ct);
+            }
+            catch (BadHttpRequestException exception) when (exception.StatusCode == StatusCodes.Status413PayloadTooLarge)
+            {
+                throw KnowledgeException.Validation(
+                    $"the archive exceeds the maximum allowed size of {maxArchiveBytes} bytes.");
+            }
+            catch (InvalidDataException)
+            {
+                throw KnowledgeException.Validation("the request body is not valid multipart/form-data.");
+            }
+            catch (BadHttpRequestException)
+            {
+                throw KnowledgeException.Validation("the request body is not valid multipart/form-data.");
+            }
+
+            var file = form.Files.GetFile("file") ?? (form.Files.Count == 1 ? form.Files[0] : null);
+            if (file is null || file.Length == 0)
+            {
+                throw KnowledgeException.Validation("a .zip file is required in the 'file' form field.");
+            }
+
+            await using var stream = file.OpenReadStream();
+            var result = await service.ImportAsync(stream, ParseConflictMode(conflict), ct);
+            return Results.Ok(new ImportDocumentsResponse(
+                result.DirectoriesCreated,
+                result.DocumentsCreated,
+                result.DocumentsUpdated,
+                result.DocumentsSkipped));
+        });
+    }
+
     private static void MapRevisions(WebApplication app)
     {
         var revisions = MapAdminGroup(app, "/admin/revisions");
@@ -200,6 +295,16 @@ public static class AdminEndpoints
                     ? await next(context)
                     : Results.Json(new { error = "admin_token_required" }, statusCode: StatusCodes.Status401Unauthorized);
             });
+
+    private static ImportConflictMode ParseConflictMode(string? value) =>
+        value?.Trim().ToLowerInvariant() switch
+        {
+            null or "" or "overwrite" => ImportConflictMode.Overwrite,
+            "skip" => ImportConflictMode.Skip,
+            "fail" => ImportConflictMode.Fail,
+            _ => throw KnowledgeException.Validation(
+                "conflict must be one of 'overwrite', 'skip' or 'fail'.")
+        };
 
     private static KeyScopeResponse ToDto(KeyScope scope) =>
         new(scope.DirectoryId, scope.Access.ToString().ToLowerInvariant());
