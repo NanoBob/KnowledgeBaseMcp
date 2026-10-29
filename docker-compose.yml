@@ -31,3 +31,7 @@ services:
 
 volumes:
   mongo-data:
+    # Pinned so the database volume does not depend on the Compose project name.
+    # Without this, running `up` from a different project name silently attaches
+    # an empty volume and the existing data appears to have vanished.
+    name: agent-knowledge-base-data

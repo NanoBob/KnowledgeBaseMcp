@@ -34,7 +34,7 @@ Creating a document requires `directoryId`, `name`, and `content`; the `id` is g
 
 In Visual Studio, open `AgentKnowledgeBase.slnx`. The `AgentKnowledgeBase.Compose` project runs the compose stack.
 
-Data is stored in the `mongo-data` named volume. Run `docker compose down -v` to delete it.
+Data is stored in the `agent-knowledge-base-data` named volume. The volume name is pinned in `docker-compose.yml`, so it does not depend on the Compose project name — otherwise starting the stack under a different project name (for example a new Visual Studio Compose launch, which generates a project name per run) attaches a fresh empty volume and existing data appears to vanish. Run `docker compose down -v` to delete the volume and all data.
 
 ## Configuration
 
