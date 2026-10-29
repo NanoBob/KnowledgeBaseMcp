@@ -114,7 +114,7 @@ dotnet/minimal-apis.md
 team/onboarding.md
 ```
 
-The manifest carries the directory descriptions and each document's `name`, `summary` and `tags`, so a round trip restores names, summaries, tags and content. Ids, versions, timestamps and authors belong to the target knowledge base and are not carried. Empty directories are listed too, so they survive a round trip. The archive is streamed, so an export never holds the whole `.zip` in memory; `Transfer:MaxExportDocuments` (default `100000`) caps how many documents one export may contain.
+The manifest carries the directory descriptions and each document's `name`, `summary` and `tags`, so a round trip restores names, summaries, tags and content. Ids, versions, timestamps and authors belong to the target knowledge base and are not carried. Empty directories are listed too, so they survive a round trip. The archive is streamed, so an export never holds the whole `.zip` in memory; `Transfer:MaxExportDocuments` (default `100000`) caps how many documents one export may contain. Because the status line and headers go out before the first byte of the archive, a failure while streaming (a database error, say) reaches the client as a truncated `200` zip rather than an error response.
 
 `POST /admin/transfer/import` accepts that archive back. Directories that do not exist are created, an existing directory's description is updated from the manifest, and each document is stored with a new revision. `conflict` decides what happens when a document with the same name already exists in the directory: `overwrite` (default) replaces it, `skip` keeps the stored document, and `fail` rejects the whole import with a `409` before anything is written. The import is not transactional, so a failure part way through `overwrite` or `skip` leaves the documents already written in place. The response reports the counts:
 
@@ -122,7 +122,7 @@ The manifest carries the directory descriptions and each document's `name`, `sum
 { "directoriesCreated": 1, "documentsCreated": 2, "documentsUpdated": 0, "documentsSkipped": 0 }
 ```
 
-An archive without a `manifest.json` is also accepted: every `.md` file is imported into a directory named after the folder that holds it, with the document name taken from the file name (sub-folders become part of the name). Folder names are slugified to fit the directory rules, so `Team Docs` becomes `team-docs` and `Café` becomes `cafe`; two folders that slugify to the same name are rejected. Such documents get an empty summary and no tags. A `.md` file that sits outside any folder has no directory to belong to, so an archive containing one is rejected rather than silently dropping it.
+An archive without a `manifest.json` is also accepted: every `.md` file is imported into a directory named after the folder that holds it, with the document name taken from the file name (sub-folders become part of the name). Folder names are slugified to fit the directory rules, so `Team Docs` becomes `team-docs` and `Café` becomes `cafe`; two folders that slugify to the same name are rejected. A folder name with no ASCII letters or digits left after slugifying (a Chinese or Japanese name, for example) has no usable directory name, so such an archive is rejected and needs a manifest. Such documents get an empty summary and no tags. A `.md` file that sits outside any folder has no directory to belong to, so an archive containing one is rejected rather than silently dropping it.
 
 ```bash
 curl -X POST http://localhost:8080/admin/transfer/export \

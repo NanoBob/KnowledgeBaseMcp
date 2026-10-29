@@ -556,6 +556,25 @@ public class DocumentTransferServiceTests
     }
 
     [Fact]
+    public async Task Import_ClearsAnExistingDirectoryDescriptionWhenTheManifestSaysItIsEmpty()
+    {
+        await CreateDirectoryAsync("team");
+
+        var archive = CreateZip(
+            ("manifest.json", """
+                {
+                  "formatVersion": 1,
+                  "directories": [{ "name": "team", "description": "" }],
+                  "documents": []
+                }
+                """));
+
+        await ImportAsync(archive);
+
+        Assert.Equal("", Assert.Single(_directoryRepo.Directories.Values).Description);
+    }
+
+    [Fact]
     public async Task Import_WithoutManifest_LeavesExistingDirectoryDescriptionsAlone()
     {
         await CreateDirectoryAsync("team");
@@ -632,6 +651,10 @@ public class DocumentTransferServiceTests
         await CreateDocumentAsync(team, "notes", "body");
 
         var plan = await _transfer.PlanExportAsync([team], default);
+
+        // The fake mirrors Mongo: summaries carry no content, so the body below can only come from the stream.
+        Assert.All(await _documentRepo.ListSummariesAsync([team], default), s => Assert.Empty(s.Content));
+
         await using var destination = new MemoryStream();
         await _transfer.WriteArchiveAsync(plan, destination, default);
 

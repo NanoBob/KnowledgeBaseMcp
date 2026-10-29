@@ -190,6 +190,7 @@ public sealed class DocumentTransferService(
         {
             if (!plan.FileNames.TryGetValue(document.Id, out var path))
             {
+                // The document was deleted between planning and streaming; leaving it out keeps the archive valid.
                 continue;
             }
 
@@ -264,11 +265,15 @@ public sealed class DocumentTransferService(
                 $"unsupported manifest formatVersion '{manifest.FormatVersion}'. Expected {FormatVersion}.");
         }
 
-        var plannedDirectories = new Dictionary<string, string>(NameComparer);
+        // A null description means the archive says nothing about it, so an existing directory keeps its own.
+        var plannedDirectories = new Dictionary<string, string?>(NameComparer);
         foreach (var directory in manifest.Directories ?? [])
         {
             var name = DirectoryRules.NormalizeName(directory.Name);
-            if (!plannedDirectories.TryAdd(name, DirectoryRules.NormalizeDescription(directory.Description)))
+            var description = directory.Description is null
+                ? null
+                : DirectoryRules.NormalizeDescription(directory.Description);
+            if (!plannedDirectories.TryAdd(name, description))
             {
                 throw KnowledgeException.Validation($"{ManifestEntryName} declares directory '{name}' more than once.");
             }
@@ -299,14 +304,13 @@ public sealed class DocumentTransferService(
                     $"{ManifestEntryName} declares document '{name}' in directory '{directoryName}' more than once.");
             }
 
-            plannedDirectories.TryAdd(directoryName, "");
+            plannedDirectories.TryAdd(directoryName, null);
             plannedDocuments.Add(new PlannedDocument(
                 directoryName,
                 name,
                 DocumentRules.NormalizeSummary(document.Summary),
                 TagRules.Normalize(document.Tags),
                 DocumentRules.NormalizeContent(DecodeUtf8(contentBytes, $"document '{name}'"))));
-            EnsureDocumentLimit(plannedDocuments.Count);
         }
 
         return new ImportPlan(
@@ -316,7 +320,7 @@ public sealed class DocumentTransferService(
 
     private async Task<ImportPlan> BuildPlanFromFilesAsync(ZipArchive archive, CancellationToken ct)
     {
-        var plannedDirectories = new Dictionary<string, string>(NameComparer);
+        var plannedDirectories = new Dictionary<string, string?>(NameComparer);
         var plannedDocuments = new List<PlannedDocument>();
         var seen = new HashSet<string>(NameComparer);
         var slugOwners = new Dictionary<string, string>(NameComparer);
@@ -335,7 +339,7 @@ public sealed class DocumentTransferService(
             {
                 // Directory entry: keep it so an empty directory still exists after the import.
                 var directoryName = ResolveDirectoryName(Segments(fullName)[0], slugOwners);
-                plannedDirectories.TryAdd(directoryName, "");
+                plannedDirectories.TryAdd(directoryName, null);
                 continue;
             }
 
@@ -367,7 +371,7 @@ public sealed class DocumentTransferService(
                     $"the archive contains document '{name}' in directory '{documentDirectory}' more than once.");
             }
 
-            plannedDirectories.TryAdd(documentDirectory, "");
+            plannedDirectories.TryAdd(documentDirectory, null);
             plannedDocuments.Add(new PlannedDocument(
                 documentDirectory,
                 name,
@@ -420,8 +424,8 @@ public sealed class DocumentTransferService(
         {
             if (directoryIds.TryGetValue(planned.Name, out var existingDirectoryId))
             {
-                // Only a manifest carries a description; a manifest-less import has none to restore.
-                if (planned.Description.Length > 0
+                // A null description means the archive said nothing about it, so the existing one is kept.
+                if (planned.Description is not null
                     && !string.Equals(directoryDescriptions[planned.Name], planned.Description, StringComparison.Ordinal))
                 {
                     await directoryService.UpdateAsync(existingDirectoryId, planned.Name, planned.Description, ct);
@@ -431,7 +435,7 @@ public sealed class DocumentTransferService(
                 continue;
             }
 
-            var created = await directoryService.CreateAsync(planned.Name, planned.Description, ImportAuthor, ct);
+            var created = await directoryService.CreateAsync(planned.Name, planned.Description ?? "", ImportAuthor, ct);
             directoryIds[created.Name] = created.Id;
             directoryDescriptions[created.Name] = created.Description;
             directoriesCreated++;
@@ -726,7 +730,7 @@ public sealed class DocumentTransferService(
         IReadOnlyList<PlannedDirectory> Directories,
         IReadOnlyList<PlannedDocument> Documents);
 
-    private sealed record PlannedDirectory(string Name, string Description);
+    private sealed record PlannedDirectory(string Name, string? Description);
 
     private sealed record PlannedDocument(
         string DirectoryName,

@@ -80,8 +80,25 @@ public sealed class FakeDocumentRepository : IDocumentRepository
         CancellationToken ct) =>
         Task.FromResult(Documents.Values
             .Where(d => directoryIds is null || directoryIds.Contains(d.DirectoryId))
-            .Select(Clone)
+            .Select(Summary)
             .ToList());
+
+    /// <summary>Mongo projects the content out of a summary query; the fake does too, so a planner that reads
+    /// content from a summary fails here instead of only in production.</summary>
+    private static KnowledgeDocument Summary(KnowledgeDocument d) => new()
+    {
+        Id = d.Id,
+        DirectoryId = d.DirectoryId,
+        Name = d.Name,
+        Summary = d.Summary,
+        Tags = [.. d.Tags],
+        Content = "",
+        Version = d.Version,
+        CreatedAt = d.CreatedAt,
+        UpdatedAt = d.UpdatedAt,
+        CreatedBy = d.CreatedBy,
+        UpdatedBy = d.UpdatedBy
+    };
 
     public Task<KnowledgeDocument?> FindAsync(Guid id, CancellationToken ct) =>
         Task.FromResult(Documents.TryGetValue(id, out var d) ? Clone(d) : null);
