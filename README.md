@@ -151,6 +151,10 @@ Errors come back as JSON with an HTTP status that matches the failure:
 
 `kind` is one of `validation` (400), `notfound` (404), `forbidden` (403) or `conflict` (409).
 
+A request that cannot be bound at all — malformed JSON, a `directoryId` that is not a GUID — is rejected before
+the action runs and comes back as a `400` `application/problem+json` `ValidationProblemDetails` body instead of
+the envelope above.
+
 ## Admin UI
 
 `Frontend/` holds a small React + Vite single-page app for managing directories, documents, revisions and API keys.
