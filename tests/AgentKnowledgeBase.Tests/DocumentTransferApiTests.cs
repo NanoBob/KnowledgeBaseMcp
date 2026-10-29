@@ -182,6 +182,22 @@ public sealed class DocumentTransferApiTests
     }
 
     [Fact]
+    public async Task Import_rejects_a_malformed_multipart_body()
+    {
+        using var app = new KnowledgeBaseApp();
+        using var client = app.CreateAdminClient();
+        using var content = new ByteArrayContent(CreateZip(("team/notes.md", "body")));
+        content.Headers.ContentType = new MediaTypeHeaderValue("multipart/form-data");
+
+        var response = await client.PostAsync("/admin/transfer/import", content);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var error = await response.Content.ReadAsStringAsync();
+        Assert.Contains("multipart", error, StringComparison.Ordinal);
+        Assert.DoesNotContain("maximum allowed size", error, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Import_requires_the_admin_token()
     {
         using var app = new KnowledgeBaseApp();

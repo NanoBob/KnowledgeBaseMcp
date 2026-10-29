@@ -152,13 +152,24 @@ public static class AdminEndpoints
         transfer.MapPost("/export", async (
             ExportDocumentsRequest request,
             DocumentTransferService service,
+            HttpResponse response,
             CancellationToken ct) =>
         {
-            var archive = await service.ExportAsync(request.DirectoryIds, ct);
-            return Results.File(
-                archive,
-                "application/zip",
-                $"knowledge-export-{DateTime.UtcNow:yyyyMMddTHHmmssZ}.zip");
+            var plan = await service.PlanExportAsync(request.DirectoryIds, ct);
+
+            response.ContentType = "application/zip";
+            response.Headers.ContentDisposition =
+                $"attachment; filename=\"knowledge-export-{plan.ExportedAt:yyyyMMddTHHmmssZ}.zip\"";
+
+            // ZipArchive writes entry headers and the central directory synchronously, so the response stream
+            // has to allow it while the archive is streamed out.
+            if (response.HttpContext.Features.Get<IHttpBodyControlFeature>() is { } bodyControl)
+            {
+                bodyControl.AllowSynchronousIO = true;
+            }
+
+            await service.WriteArchiveAsync(plan, response.Body, ct);
+            return Results.Empty;
         });
 
         // The archive is read through the request body so the configured limit can replace the framework
@@ -167,10 +178,10 @@ public static class AdminEndpoints
             HttpRequest request,
             string? conflict,
             DocumentTransferService service,
+            IOptions<TransferOptions> options,
             CancellationToken ct) =>
         {
-            var maxArchiveBytes = request.HttpContext.RequestServices
-                .GetRequiredService<IOptions<TransferOptions>>().Value.MaxArchiveBytes;
+            var maxArchiveBytes = options.Value.MaxArchiveBytes;
 
             var sizeFeature = request.HttpContext.Features.Get<IHttpMaxRequestBodySizeFeature>();
             if (sizeFeature is { IsReadOnly: false })
@@ -189,10 +200,18 @@ public static class AdminEndpoints
             {
                 form = await request.ReadFormAsync(ct);
             }
-            catch (BadHttpRequestException)
+            catch (BadHttpRequestException exception) when (exception.StatusCode == StatusCodes.Status413PayloadTooLarge)
             {
                 throw KnowledgeException.Validation(
                     $"the archive exceeds the maximum allowed size of {maxArchiveBytes} bytes.");
+            }
+            catch (InvalidDataException)
+            {
+                throw KnowledgeException.Validation("the request body is not valid multipart/form-data.");
+            }
+            catch (BadHttpRequestException)
+            {
+                throw KnowledgeException.Validation("the request body is not valid multipart/form-data.");
             }
 
             var file = form.Files.GetFile("file") ?? (form.Files.Count == 1 ? form.Files[0] : null);

@@ -31,4 +31,11 @@ public sealed class TransferOptions
     /// <summary>Most documents a single import may contain.</summary>
     [Range(1, 100_000)]
     public int MaxDocuments { get; set; } = 10_000;
+
+    /// <summary>
+    /// Most documents a single export may contain. The archive is streamed, so this bounds the work and the
+    /// download size rather than the memory a request holds.
+    /// </summary>
+    [Range(1, 1_000_000)]
+    public int MaxExportDocuments { get; set; } = 100_000;
 }

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.IO.Compression;
 using System.Text;
 using System.Text.Json;
@@ -7,28 +8,25 @@ using Microsoft.Extensions.Options;
 
 namespace AgentKnowledgeBase.Mcp.Services;
 
-/// <summary>The manifest.json payload written into an exported archive.</summary>
+/// <summary>
+/// The manifest.json payload written into an exported archive. It carries what an import restores: the
+/// directory descriptions and each document's name, summary, tags and file. Ids, versions, timestamps and
+/// authors belong to the target knowledge base, so they are deliberately not part of the format.
+/// </summary>
 public sealed record TransferManifest(
     int? FormatVersion,
     DateTime? ExportedAt,
     List<TransferDirectory>? Directories,
     List<TransferDocument>? Documents);
 
-public sealed record TransferDirectory(Guid? Id, string? Name, string? Description);
+public sealed record TransferDirectory(string? Name, string? Description);
 
 public sealed record TransferDocument(
-    Guid? Id,
-    Guid? DirectoryId,
     string? DirectoryName,
     string? Name,
     string? Summary,
     string[]? Tags,
-    string? File,
-    int? Version,
-    DateTime? CreatedAt,
-    DateTime? UpdatedAt,
-    string? CreatedBy,
-    string? UpdatedBy);
+    string? File);
 
 /// <summary>What to do when an imported document already exists.</summary>
 public enum ImportConflictMode
@@ -46,9 +44,20 @@ public enum ImportConflictMode
 public sealed record ImportResult(int DirectoriesCreated, int DocumentsCreated, int DocumentsUpdated, int DocumentsSkipped);
 
 /// <summary>
-/// Moves documents between the knowledge base and .zip archives. Archives contain a manifest.json with the
-/// full document metadata plus one markdown file per document. Archives without a manifest are also accepted,
-/// in which case the first path segment of every markdown file is treated as the directory name.
+/// Everything an export needs before the first byte reaches the response, so a rejected export still
+/// produces a normal error response instead of a truncated download.
+/// </summary>
+public sealed record ExportPlan(
+    IReadOnlyList<Guid> DirectoryIds,
+    IReadOnlyList<TransferDirectory> Directories,
+    IReadOnlyList<TransferDocument> Documents,
+    IReadOnlyDictionary<Guid, string> FileNames,
+    DateTime ExportedAt);
+
+/// <summary>
+/// Moves documents between the knowledge base and .zip archives. Archives contain a manifest.json describing
+/// the directories and documents plus one markdown file per document. Archives without a manifest are also
+/// accepted, in which case the first path segment of every markdown file is treated as the directory name.
 /// </summary>
 public sealed class DocumentTransferService(
     IDirectoryRepository directories,
@@ -66,6 +75,14 @@ public sealed class DocumentTransferService(
     private static readonly ApiCaller ImportCaller = new(Guid.Empty, ImportAuthor, [], IsAdmin: true);
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private static readonly UTF8Encoding StrictUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
+
+    /// <summary>
+    /// Matches names the way the document index does. The Mongo unique index uses the ICU 'en' collation at
+    /// secondary strength, so plain ordinal comparison would let through pairs the database treats as equal.
+    /// </summary>
+    private static readonly StringComparer NameComparer =
+        StringComparer.Create(CultureInfo.GetCultureInfo("en"), CompareOptions.IgnoreCase);
+
     private static readonly char[] InvalidFileNameChars = ['<', '>', ':', '"', '/', '\\', '|', '?', '*'];
     private static readonly HashSet<string> ReservedFileNames = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -77,10 +94,10 @@ public sealed class DocumentTransferService(
     private TransferOptions Options => options.Value;
 
     /// <summary>
-    /// Builds a .zip with the documents of the selected directories. The directories themselves are always
-    /// included so an empty directory still round-trips.
+    /// Resolves an export and validates it before any byte is written. The directories themselves are always
+    /// included so an empty directory still round-trips. Document content is not read here.
     /// </summary>
-    public async Task<byte[]> ExportAsync(
+    public async Task<ExportPlan> PlanExportAsync(
         IReadOnlyCollection<Guid>? directoryIds,
         CancellationToken ct)
     {
@@ -102,13 +119,19 @@ public sealed class DocumentTransferService(
         }
 
         var directoryNames = selected.ToDictionary(d => d.Id, d => d.Name);
-        var exportable = await documents.ListByDirectoryIdsAsync(ids, ct);
+        var summaries = await documents.ListSummariesAsync(ids, ct);
+        if (summaries.Count > Options.MaxExportDocuments)
+        {
+            throw KnowledgeException.Validation(
+                $"the selection contains more than {Options.MaxExportDocuments} documents. " +
+                "Export fewer directories at a time.");
+        }
 
-        var files = new List<(string Path, string Content)>();
-        var manifestDocuments = new List<TransferDocument>();
+        var manifestDocuments = new List<TransferDocument>(summaries.Count);
+        var fileNames = new Dictionary<Guid, string>(summaries.Count);
         var usedFileNames = new Dictionary<Guid, HashSet<string>>();
 
-        foreach (var document in exportable
+        foreach (var document in summaries
                      .OrderBy(d => directoryNames[d.DirectoryId], StringComparer.Ordinal)
                      .ThenBy(d => d.Name, StringComparer.OrdinalIgnoreCase)
                      .ThenBy(d => d.Id))
@@ -121,49 +144,60 @@ public sealed class DocumentTransferService(
             }
 
             var path = $"{directoryName}/{UniqueFileName(document.Name, document.Id, used)}.md";
-            files.Add((path, document.Content));
+            fileNames[document.Id] = path;
             manifestDocuments.Add(new TransferDocument(
-                document.Id,
-                document.DirectoryId,
                 directoryName,
                 document.Name,
                 document.Summary,
                 [.. document.Tags],
-                path,
-                document.Version,
-                document.CreatedAt,
-                document.UpdatedAt,
-                document.CreatedBy,
-                document.UpdatedBy));
+                path));
         }
 
-        var manifest = new TransferManifest(
-            FormatVersion,
-            DateTime.UtcNow,
+        return new ExportPlan(
+            [.. ids],
             [.. selected
                 .OrderBy(d => d.Name, StringComparer.Ordinal)
-                .Select(d => new TransferDirectory(d.Id, d.Name, d.Description))],
-            manifestDocuments);
+                .Select(d => new TransferDirectory(d.Name, d.Description))],
+            manifestDocuments,
+            fileNames,
+            DateTime.UtcNow);
+    }
 
-        using var buffer = new MemoryStream();
-        using (var archive = new ZipArchive(buffer, ZipArchiveMode.Create, leaveOpen: true))
+    /// <summary>
+    /// Writes the planned archive to <paramref name="destination"/>, streaming one document at a time so the
+    /// archive is never buffered whole.
+    /// </summary>
+    public async Task WriteArchiveAsync(ExportPlan plan, Stream destination, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        ArgumentNullException.ThrowIfNull(destination);
+
+        using var archive = new ZipArchive(destination, ZipArchiveMode.Create, leaveOpen: true);
+
+        var manifestEntry = archive.CreateEntry(ManifestEntryName, CompressionLevel.Optimal);
+        await using (var manifestStream = manifestEntry.Open())
         {
-            var manifestEntry = archive.CreateEntry(ManifestEntryName, CompressionLevel.Optimal);
-            await using (var manifestStream = manifestEntry.Open())
-            {
-                await JsonSerializer.SerializeAsync(manifestStream, manifest, JsonOptions, ct);
-            }
-
-            foreach (var (path, content) in files)
-            {
-                var entry = archive.CreateEntry(path, CompressionLevel.Optimal);
-                await using var entryStream = entry.Open();
-                await using var writer = new StreamWriter(entryStream, StrictUtf8);
-                await writer.WriteAsync(content);
-            }
+            await JsonSerializer.SerializeAsync(
+                manifestStream,
+                new TransferManifest(FormatVersion, plan.ExportedAt, [.. plan.Directories], [.. plan.Documents]),
+                JsonOptions,
+                ct);
         }
 
-        return buffer.ToArray();
+        await foreach (var document in documents
+                           .StreamByDirectoryIdsAsync(plan.DirectoryIds, ct)
+                           .WithCancellation(ct))
+        {
+            if (!plan.FileNames.TryGetValue(document.Id, out var path))
+            {
+                continue;
+            }
+
+            var entry = archive.CreateEntry(path, CompressionLevel.Optimal);
+            await using var entryStream = entry.Open();
+            await using var writer = new StreamWriter(entryStream, StrictUtf8);
+            await writer.WriteAsync(document.Content.AsMemory(), ct);
+        }
     }
 
     /// <summary>
@@ -230,7 +264,7 @@ public sealed class DocumentTransferService(
                 $"unsupported manifest formatVersion '{manifest.FormatVersion}'. Expected {FormatVersion}.");
         }
 
-        var plannedDirectories = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var plannedDirectories = new Dictionary<string, string>(NameComparer);
         foreach (var directory in manifest.Directories ?? [])
         {
             var name = DirectoryRules.NormalizeName(directory.Name);
@@ -240,8 +274,10 @@ public sealed class DocumentTransferService(
             }
         }
 
+        EnsureDocumentLimit(manifest.Documents?.Count ?? 0);
+
         var plannedDocuments = new List<PlannedDocument>();
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seen = new HashSet<string>(NameComparer);
         var totalBytes = 0;
 
         foreach (var document in manifest.Documents ?? [])
@@ -270,9 +306,8 @@ public sealed class DocumentTransferService(
                 DocumentRules.NormalizeSummary(document.Summary),
                 TagRules.Normalize(document.Tags),
                 DocumentRules.NormalizeContent(DecodeUtf8(contentBytes, $"document '{name}'"))));
+            EnsureDocumentLimit(plannedDocuments.Count);
         }
-
-        EnsureDocumentLimit(plannedDocuments.Count);
 
         return new ImportPlan(
             [.. plannedDirectories.Select(pair => new PlannedDirectory(pair.Key, pair.Value))],
@@ -281,9 +316,11 @@ public sealed class DocumentTransferService(
 
     private async Task<ImportPlan> BuildPlanFromFilesAsync(ZipArchive archive, CancellationToken ct)
     {
-        var plannedDirectories = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var plannedDirectories = new Dictionary<string, string>(NameComparer);
         var plannedDocuments = new List<PlannedDocument>();
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seen = new HashSet<string>(NameComparer);
+        var slugOwners = new Dictionary<string, string>(NameComparer);
+        var rootMarkdown = new List<string>();
         var totalBytes = 0;
 
         foreach (var entry in archive.Entries)
@@ -297,7 +334,7 @@ public sealed class DocumentTransferService(
             if (entry.Name.Length == 0)
             {
                 // Directory entry: keep it so an empty directory still exists after the import.
-                var directoryName = DirectoryRules.NormalizeName(Segments(fullName)[0]);
+                var directoryName = ResolveDirectoryName(Segments(fullName)[0], slugOwners);
                 plannedDirectories.TryAdd(directoryName, "");
                 continue;
             }
@@ -310,11 +347,13 @@ public sealed class DocumentTransferService(
             var segments = Segments(fullName);
             if (segments.Length < 2)
             {
-                // A markdown file at the archive root has no directory to belong to.
+                // A markdown file at the archive root has no directory to belong to; report it rather than
+                // dropping it silently.
+                rootMarkdown.Add(fullName);
                 continue;
             }
 
-            var documentDirectory = DirectoryRules.NormalizeName(segments[0]);
+            var documentDirectory = ResolveDirectoryName(segments[0], slugOwners);
             var name = DocumentRules.NormalizeName(string.Join('/', segments[1..])[..^3]);
 
             var contentBytes = await ReadBoundedAsync(
@@ -335,9 +374,18 @@ public sealed class DocumentTransferService(
                 "",
                 [],
                 DocumentRules.NormalizeContent(DecodeUtf8(contentBytes, $"document '{name}'"))));
+            EnsureDocumentLimit(plannedDocuments.Count);
         }
 
-        EnsureDocumentLimit(plannedDocuments.Count);
+        if (rootMarkdown.Count > 0)
+        {
+            var listed = string.Join(", ", rootMarkdown.Take(5));
+            var more = rootMarkdown.Count > 5 ? $" and {rootMarkdown.Count - 5} more" : "";
+            throw KnowledgeException.Validation(
+                $"the archive contains markdown files outside any directory: {listed}{more}. " +
+                "Put every file in a folder named after the directory it belongs to.");
+        }
+
         if (plannedDirectories.Count == 0)
         {
             throw KnowledgeException.Validation(
@@ -354,10 +402,12 @@ public sealed class DocumentTransferService(
         ImportConflictMode conflictMode,
         CancellationToken ct)
     {
-        var directoryIds = new Dictionary<string, Guid>(StringComparer.OrdinalIgnoreCase);
+        var directoryIds = new Dictionary<string, Guid>(NameComparer);
+        var directoryDescriptions = new Dictionary<string, string>(NameComparer);
         foreach (var directory in await directories.ListAsync(ct))
         {
             directoryIds[directory.Name] = directory.Id;
+            directoryDescriptions[directory.Name] = directory.Description;
         }
 
         if (conflictMode == ImportConflictMode.Fail)
@@ -368,13 +418,22 @@ public sealed class DocumentTransferService(
         var directoriesCreated = 0;
         foreach (var planned in plan.Directories)
         {
-            if (directoryIds.ContainsKey(planned.Name))
+            if (directoryIds.TryGetValue(planned.Name, out var existingDirectoryId))
             {
+                // Only a manifest carries a description; a manifest-less import has none to restore.
+                if (planned.Description.Length > 0
+                    && !string.Equals(directoryDescriptions[planned.Name], planned.Description, StringComparison.Ordinal))
+                {
+                    await directoryService.UpdateAsync(existingDirectoryId, planned.Name, planned.Description, ct);
+                    directoryDescriptions[planned.Name] = planned.Description;
+                }
+
                 continue;
             }
 
             var created = await directoryService.CreateAsync(planned.Name, planned.Description, ImportAuthor, ct);
             directoryIds[created.Name] = created.Id;
+            directoryDescriptions[created.Name] = created.Description;
             directoriesCreated++;
         }
 
@@ -432,7 +491,7 @@ public sealed class DocumentTransferService(
         IReadOnlyDictionary<string, Guid> directoryIds,
         CancellationToken ct)
     {
-        foreach (var group in plan.Documents.GroupBy(d => d.DirectoryName, StringComparer.OrdinalIgnoreCase))
+        foreach (var group in plan.Documents.GroupBy(d => d.DirectoryName, NameComparer))
         {
             if (!directoryIds.TryGetValue(group.Key, out var directoryId))
             {
@@ -441,7 +500,7 @@ public sealed class DocumentTransferService(
 
             var stored = (await documents.ListSummariesAsync([directoryId], ct))
                 .Select(d => d.Name)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                .ToHashSet(NameComparer);
 
             var conflicts = group
                 .Where(d => stored.Contains(d.Name))
@@ -499,6 +558,78 @@ public sealed class DocumentTransferService(
         }
     }
 
+    /// <summary>
+    /// Derives a directory name from a folder in a manifest-less archive. Two folders that would land in the
+    /// same directory are rejected instead of being merged.
+    /// </summary>
+    private static string ResolveDirectoryName(string folder, Dictionary<string, string> slugOwners)
+    {
+        var slug = SlugifyDirectoryName(folder);
+        if (slugOwners.TryGetValue(slug, out var owner))
+        {
+            if (!string.Equals(owner, folder, StringComparison.Ordinal))
+            {
+                throw KnowledgeException.Validation(
+                    $"the archive contains folders '{owner}' and '{folder}', which both map to directory '{slug}'.");
+            }
+
+            return slug;
+        }
+
+        slugOwners[slug] = folder;
+        return slug;
+    }
+
+    private static string SlugifyDirectoryName(string folder)
+    {
+        var decomposed = folder.Trim().Normalize(NormalizationForm.FormD);
+        var builder = new StringBuilder(decomposed.Length);
+
+        foreach (var character in decomposed)
+        {
+            if (CharUnicodeInfo.GetUnicodeCategory(character) == UnicodeCategory.NonSpacingMark)
+            {
+                continue;
+            }
+
+            var lowered = char.ToLowerInvariant(character);
+            if (lowered is (>= 'a' and <= 'z') or (>= '0' and <= '9') or '.' or '_' or '-')
+            {
+                builder.Append(lowered);
+            }
+            else if (builder.Length > 0 && builder[^1] != '-')
+            {
+                builder.Append('-');
+            }
+        }
+
+        var slug = builder.ToString();
+        var start = 0;
+        while (start < slug.Length && !char.IsAsciiLetterOrDigit(slug[start]))
+        {
+            start++;
+        }
+
+        var end = slug.Length;
+        while (end > start && !char.IsAsciiLetterOrDigit(slug[end - 1]))
+        {
+            end--;
+        }
+
+        slug = slug[start..end];
+        if (slug.Length == 0)
+        {
+            throw KnowledgeException.Validation($"cannot derive a directory name from the folder '{folder}'.");
+        }
+
+        if (slug.Length > DirectoryRules.MaxNameLength)
+        {
+            slug = slug[..DirectoryRules.MaxNameLength].TrimEnd('-', '.', '_');
+        }
+
+        return DirectoryRules.NormalizeName(slug);
+    }
+
     private static ZipArchiveEntry? FindEntry(ZipArchive archive, string path) =>
         archive.GetEntry(path)
         ?? archive.Entries.FirstOrDefault(entry =>
@@ -536,14 +667,18 @@ public sealed class DocumentTransferService(
 
     private static string DecodeUtf8(byte[] bytes, string description)
     {
+        string text;
         try
         {
-            return StrictUtf8.GetString(bytes);
+            text = StrictUtf8.GetString(bytes);
         }
         catch (DecoderFallbackException)
         {
             throw KnowledgeException.Validation($"{description} is not valid UTF-8.");
         }
+
+        // A byte order mark is an encoding artefact, not part of the document.
+        return text.StartsWith('\uFEFF') ? text[1..] : text;
     }
 
     private static string UniqueFileName(string name, Guid id, HashSet<string> used)

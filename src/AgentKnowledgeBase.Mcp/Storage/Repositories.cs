@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using AgentKnowledgeBase.Mcp.Domain;
 using MongoDB.Driver;
 
@@ -44,9 +45,10 @@ public interface IDocumentRepository
         CancellationToken ct);
 
     /// <summary>
-    /// Full documents, including content, for the requested directories. Pass null for every directory.
+    /// Full documents, including content, for the requested directories, streamed batch by batch so callers
+    /// never hold every document in memory. Pass null for every directory.
     /// </summary>
-    Task<List<KnowledgeDocument>> ListByDirectoryIdsAsync(
+    IAsyncEnumerable<KnowledgeDocument> StreamByDirectoryIdsAsync(
         IReadOnlyCollection<Guid>? directoryIds,
         CancellationToken ct);
 
@@ -190,17 +192,25 @@ public sealed class MongoDocumentRepository(IMongoDatabase database) : IDocument
     public async Task<KnowledgeDocument?> FindAsync(Guid id, CancellationToken ct) =>
         await _documents.Find(d => d.Id == id).FirstOrDefaultAsync(ct);
 
-    public Task<List<KnowledgeDocument>> ListByDirectoryIdsAsync(
+    public async IAsyncEnumerable<KnowledgeDocument> StreamByDirectoryIdsAsync(
         IReadOnlyCollection<Guid>? directoryIds,
-        CancellationToken ct)
+        [EnumeratorCancellation] CancellationToken ct)
     {
         var filter = directoryIds is null
             ? FilterDefinition<KnowledgeDocument>.Empty
             : Builders<KnowledgeDocument>.Filter.In(d => d.DirectoryId, directoryIds);
 
-        return _documents.Find(filter)
+        using var cursor = await _documents.Find(filter)
             .SortBy(d => d.DirectoryId).ThenBy(d => d.Name)
-            .ToListAsync(ct);
+            .ToCursorAsync(ct);
+
+        while (await cursor.MoveNextAsync(ct))
+        {
+            foreach (var document in cursor.Current)
+            {
+                yield return document;
+            }
+        }
     }
 
     public async Task<KnowledgeDocument?> FindByNameAsync(Guid directoryId, string name, CancellationToken ct) =>

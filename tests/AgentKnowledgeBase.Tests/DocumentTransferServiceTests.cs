@@ -94,6 +94,14 @@ public class DocumentTransferServiceTests
         });
     }
 
+    private async Task<byte[]> ExportAsync(IReadOnlyCollection<Guid> directoryIds)
+    {
+        var plan = await _transfer.PlanExportAsync(directoryIds, default);
+        using var buffer = new MemoryStream();
+        await _transfer.WriteArchiveAsync(plan, buffer, default);
+        return buffer.ToArray();
+    }
+
     private static TransferManifest ReadManifest(byte[] archive) =>
         JsonSerializer.Deserialize<TransferManifest>(ReadEntries(archive)[DocumentTransferService.ManifestEntryName], JsonOptions)!;
 
@@ -104,7 +112,7 @@ public class DocumentTransferServiceTests
         await CreateDocumentAsync(team, "EF Core Tips", "# tips", "query notes", "dotnet", "efcore");
         await CreateDocumentAsync(team, "Deploy Notes", "# deploy");
 
-        var archive = await _transfer.ExportAsync([team], default);
+        var archive = await ExportAsync([team]);
         var entries = ReadEntries(archive);
         var manifest = ReadManifest(archive);
 
@@ -129,7 +137,7 @@ public class DocumentTransferServiceTests
         await CreateDocumentAsync(team, "Team Notes", "team body");
         await CreateDocumentAsync(other, "Other Notes", "other body");
 
-        var archive = await _transfer.ExportAsync([team], default);
+        var archive = await ExportAsync([team]);
         var entries = ReadEntries(archive);
         var manifest = ReadManifest(archive);
 
@@ -144,7 +152,7 @@ public class DocumentTransferServiceTests
     {
         var team = await CreateDirectoryAsync("team");
 
-        var archive = await _transfer.ExportAsync([team], default);
+        var archive = await ExportAsync([team]);
         var manifest = ReadManifest(archive);
 
         var directory = Assert.Single(manifest.Directories!);
@@ -158,7 +166,7 @@ public class DocumentTransferServiceTests
         var team = await CreateDirectoryAsync("team");
         await CreateDocumentAsync(team, "guides/setup", "body");
 
-        var archive = await _transfer.ExportAsync([team], default);
+        var archive = await ExportAsync([team]);
         var manifest = ReadManifest(archive);
 
         var document = Assert.Single(manifest.Documents!);
@@ -169,7 +177,7 @@ public class DocumentTransferServiceTests
     [Fact]
     public async Task Export_RequiresAtLeastOneDirectory()
     {
-        var ex = await Assert.ThrowsAsync<KnowledgeException>(() => _transfer.ExportAsync([], default));
+        var ex = await Assert.ThrowsAsync<KnowledgeException>(() => _transfer.PlanExportAsync([], default));
 
         Assert.Equal(KnowledgeErrorKind.Validation, ex.Kind);
     }
@@ -177,7 +185,7 @@ public class DocumentTransferServiceTests
     [Fact]
     public async Task Export_UnknownDirectory_IsNotFound()
     {
-        var ex = await Assert.ThrowsAsync<KnowledgeException>(() => _transfer.ExportAsync([Guid.NewGuid()], default));
+        var ex = await Assert.ThrowsAsync<KnowledgeException>(() => _transfer.PlanExportAsync([Guid.NewGuid()], default));
 
         Assert.Equal(KnowledgeErrorKind.NotFound, ex.Kind);
     }
@@ -188,7 +196,7 @@ public class DocumentTransferServiceTests
         var team = await CreateDirectoryAsync("team");
         await CreateDocumentAsync(team, "EF Core Tips", "# tips", "query notes", "dotnet");
         await CreateDocumentAsync(team, "Deploy Notes", "# deploy");
-        var archive = await _transfer.ExportAsync([team], default);
+        var archive = await ExportAsync([team]);
 
         var sourceDirectories = new FakeDirectoryRepository();
         var sourceDocuments = new FakeDocumentRepository();
@@ -331,11 +339,19 @@ public class DocumentTransferServiceTests
         var team = await CreateDirectoryAsync("team");
         await CreateDocumentAsync(team, "notes", "old body");
 
+        // The fresh document and its new directory come first, so they would already be written if the
+        // conflict were detected while applying rather than before.
         var ex = await Assert.ThrowsAsync<KnowledgeException>(() =>
-            ImportAsync(CreateZip(("team/notes.md", "new body"), ("team/fresh.md", "fresh")), ImportConflictMode.Fail));
+            ImportAsync(
+                CreateZip(("fresh/new.md", "fresh body"), ("team/notes.md", "new body")),
+                ImportConflictMode.Fail));
 
         Assert.Equal(KnowledgeErrorKind.Conflict, ex.Kind);
-        Assert.Equal("old body", Assert.Single(_documentRepo.Documents.Values).Content);
+        Assert.Equal("team", Assert.Single(_directoryRepo.Directories.Values).Name);
+        var stored = Assert.Single(_documentRepo.Documents.Values);
+        Assert.Equal("notes", stored.Name);
+        Assert.Equal("old body", stored.Content);
+        Assert.Equal("old body", Assert.Single(_documentRepo.Revisions).Content);
     }
 
     [Fact]
@@ -475,5 +491,151 @@ public class DocumentTransferServiceTests
         var revision = Assert.Single(_documentRepo.Revisions);
         Assert.Equal("body", revision.Content);
         Assert.Equal(1, revision.Version);
+    }
+
+    [Fact]
+    public async Task Import_WithoutManifest_RejectsMarkdownFilesOutsideAnyDirectory()
+    {
+        var ex = await Assert.ThrowsAsync<KnowledgeException>(() =>
+            ImportAsync(CreateZip(("readme.md", "root"), ("team/guides.md", "guides"))));
+
+        Assert.Equal(KnowledgeErrorKind.Validation, ex.Kind);
+        Assert.Contains("readme.md", ex.Message, StringComparison.Ordinal);
+        Assert.Empty(_documentRepo.Documents);
+        Assert.Empty(_directoryRepo.Directories);
+    }
+
+    [Fact]
+    public async Task Import_WithoutManifest_SlugifiesFolderNames()
+    {
+        var result = await ImportAsync(CreateZip(("Team Docs/notes.md", "docs"), ("Café/notes.md", "cafe")));
+
+        Assert.Equal(2, result.DirectoriesCreated);
+        Assert.Contains(_directoryRepo.Directories.Values, d => d.Name == "team-docs");
+        Assert.Contains(_directoryRepo.Directories.Values, d => d.Name == "cafe");
+    }
+
+    [Fact]
+    public async Task Import_WithoutManifest_RejectsFoldersThatShareADirectoryName()
+    {
+        var ex = await Assert.ThrowsAsync<KnowledgeException>(() =>
+            ImportAsync(CreateZip(("Team Docs/notes.md", "docs"), ("team-docs/other.md", "other"))));
+
+        Assert.Equal(KnowledgeErrorKind.Validation, ex.Kind);
+        Assert.Contains("team-docs", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Import_StripsTheUtf8ByteOrderMarkFromContent()
+    {
+        await ImportAsync(CreateZip(("team/notes.md", "\uFEFFbody")));
+
+        Assert.Equal("body", Assert.Single(_documentRepo.Documents.Values).Content);
+    }
+
+    [Fact]
+    public async Task Import_UpdatesTheDescriptionOfAnExistingDirectory()
+    {
+        var team = await CreateDirectoryAsync("team");
+
+        var archive = CreateZip(
+            ("manifest.json", """
+                {
+                  "formatVersion": 1,
+                  "directories": [{ "name": "team", "description": "updated description" }],
+                  "documents": []
+                }
+                """));
+
+        var result = await ImportAsync(archive);
+
+        Assert.Equal(0, result.DirectoriesCreated);
+        var directory = Assert.Single(_directoryRepo.Directories.Values);
+        Assert.Equal(team, directory.Id);
+        Assert.Equal("updated description", directory.Description);
+    }
+
+    [Fact]
+    public async Task Import_WithoutManifest_LeavesExistingDirectoryDescriptionsAlone()
+    {
+        await CreateDirectoryAsync("team");
+
+        await ImportAsync(CreateZip(("team/notes.md", "body")));
+
+        Assert.Equal("team documents", Assert.Single(_directoryRepo.Directories.Values).Description);
+    }
+
+    [Fact]
+    public async Task Import_RejectsManifestNamesTheDatabaseTreatsAsDuplicates()
+    {
+        // 'ﬁ' and 'fi' are distinct strings but equal under the ICU 'en' secondary collation of the
+        // document name index, so the archive must be rejected before anything is stored.
+        var archive = CreateZip(
+            ("manifest.json", """
+                {
+                  "formatVersion": 1,
+                  "documents": [
+                    { "directoryName": "team", "name": "\uFB01le", "file": "team/a.md" },
+                    { "directoryName": "team", "name": "file", "file": "team/b.md" }
+                  ]
+                }
+                """),
+            ("team/a.md", "one"),
+            ("team/b.md", "two"));
+
+        var ex = await Assert.ThrowsAsync<KnowledgeException>(() => ImportAsync(archive));
+
+        Assert.Equal(KnowledgeErrorKind.Validation, ex.Kind);
+        Assert.Empty(_documentRepo.Documents);
+    }
+
+    [Fact]
+    public async Task Import_RejectsArchivesWithTooManyDocumentsWhenAManifestDeclaresThem()
+    {
+        _options.MaxDocuments = 1;
+
+        var archive = CreateZip(
+            ("manifest.json", """
+                {
+                  "formatVersion": 1,
+                  "documents": [
+                    { "directoryName": "team", "name": "one", "file": "team/one.md" },
+                    { "directoryName": "team", "name": "two", "file": "team/two.md" }
+                  ]
+                }
+                """),
+            ("team/one.md", "one"),
+            ("team/two.md", "two"));
+
+        var ex = await Assert.ThrowsAsync<KnowledgeException>(() => ImportAsync(archive));
+
+        Assert.Equal(KnowledgeErrorKind.Validation, ex.Kind);
+    }
+
+    [Fact]
+    public async Task Export_RejectsSelectionsLargerThanTheConfiguredLimit()
+    {
+        var team = await CreateDirectoryAsync("team");
+        await CreateDocumentAsync(team, "one", "one");
+        await CreateDocumentAsync(team, "two", "two");
+        _options.MaxExportDocuments = 1;
+
+        var ex = await Assert.ThrowsAsync<KnowledgeException>(() => _transfer.PlanExportAsync([team], default));
+
+        Assert.Equal(KnowledgeErrorKind.Validation, ex.Kind);
+    }
+
+    [Fact]
+    public async Task Export_StreamsContentThatWasNotReadWhilePlanning()
+    {
+        var team = await CreateDirectoryAsync("team");
+        await CreateDocumentAsync(team, "notes", "body");
+
+        var plan = await _transfer.PlanExportAsync([team], default);
+        await using var destination = new MemoryStream();
+        await _transfer.WriteArchiveAsync(plan, destination, default);
+
+        Assert.Single(plan.Documents);
+        Assert.Equal("body", ReadEntries(destination.ToArray())["team/notes.md"]);
     }
 }
