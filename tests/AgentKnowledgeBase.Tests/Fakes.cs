@@ -80,6 +80,20 @@ public sealed class FakeDocumentRepository : IDocumentRepository
     public Task<KnowledgeDocument?> FindAsync(Guid id, CancellationToken ct) =>
         Task.FromResult(Documents.TryGetValue(id, out var d) ? Clone(d) : null);
 
+    public Task<List<KnowledgeDocument>> ListByDirectoryIdsAsync(
+        IReadOnlyCollection<Guid>? directoryIds,
+        CancellationToken ct) =>
+        Task.FromResult(Documents.Values
+            .Where(d => directoryIds is null || directoryIds.Contains(d.DirectoryId))
+            .Select(Clone)
+            .ToList());
+
+    public Task<KnowledgeDocument?> FindByNameAsync(Guid directoryId, string name, CancellationToken ct) =>
+        Task.FromResult(Documents.Values
+            .Where(d => d.DirectoryId == directoryId && string.Equals(d.Name, name, StringComparison.OrdinalIgnoreCase))
+            .Select(Clone)
+            .FirstOrDefault());
+
     public Task<bool> TryInsertAsync(KnowledgeDocument document, CancellationToken ct)
     {
         if (Documents.ContainsKey(document.Id) || HasName(document.DirectoryId, document.Name, null))

@@ -43,7 +43,17 @@ public interface IDocumentRepository
         IReadOnlyCollection<Guid>? directoryIds,
         CancellationToken ct);
 
+    /// <summary>
+    /// Full documents, including content, for the requested directories. Pass null for every directory.
+    /// </summary>
+    Task<List<KnowledgeDocument>> ListByDirectoryIdsAsync(
+        IReadOnlyCollection<Guid>? directoryIds,
+        CancellationToken ct);
+
     Task<KnowledgeDocument?> FindAsync(Guid id, CancellationToken ct);
+
+    /// <summary>Finds a document by name within a directory, ignoring case.</summary>
+    Task<KnowledgeDocument?> FindByNameAsync(Guid directoryId, string name, CancellationToken ct);
 
     /// <summary>Inserts a new document. Returns false when the id or the directory/name pair already exists.</summary>
     Task<bool> TryInsertAsync(KnowledgeDocument document, CancellationToken ct);
@@ -157,6 +167,8 @@ public sealed class MongoDirectoryRepository(IMongoDatabase database) : IDirecto
 
 public sealed class MongoDocumentRepository(IMongoDatabase database) : IDocumentRepository
 {
+    private static readonly Collation DocumentNameCollation = new("en", strength: CollationStrength.Secondary);
+
     private readonly IMongoCollection<KnowledgeDocument> _documents = database.GetCollection<KnowledgeDocument>("knowledge_documents");
     private readonly IMongoCollection<KnowledgeDocumentRevision> _revisions =
         database.GetCollection<KnowledgeDocumentRevision>("knowledge_document_revisions");
@@ -177,6 +189,25 @@ public sealed class MongoDocumentRepository(IMongoDatabase database) : IDocument
 
     public async Task<KnowledgeDocument?> FindAsync(Guid id, CancellationToken ct) =>
         await _documents.Find(d => d.Id == id).FirstOrDefaultAsync(ct);
+
+    public Task<List<KnowledgeDocument>> ListByDirectoryIdsAsync(
+        IReadOnlyCollection<Guid>? directoryIds,
+        CancellationToken ct)
+    {
+        var filter = directoryIds is null
+            ? FilterDefinition<KnowledgeDocument>.Empty
+            : Builders<KnowledgeDocument>.Filter.In(d => d.DirectoryId, directoryIds);
+
+        return _documents.Find(filter)
+            .SortBy(d => d.DirectoryId).ThenBy(d => d.Name)
+            .ToListAsync(ct);
+    }
+
+    public async Task<KnowledgeDocument?> FindByNameAsync(Guid directoryId, string name, CancellationToken ct) =>
+        await _documents.Find(
+                d => d.DirectoryId == directoryId && d.Name == name,
+                new FindOptions { Collation = DocumentNameCollation })
+            .FirstOrDefaultAsync(ct);
 
     public async Task<bool> TryInsertAsync(KnowledgeDocument document, CancellationToken ct)
     {
