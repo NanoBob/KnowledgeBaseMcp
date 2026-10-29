@@ -36,6 +36,16 @@ In Visual Studio, open `AgentKnowledgeBase.slnx`. The `AgentKnowledgeBase.Compos
 
 Data is stored in the `mongo-data` named volume. Run `docker compose down -v` to delete it.
 
+### Publish the container image
+
+`docker compose build mcp` produces the local image `agent-knowledge-base-mcp`. Push it to a registry with:
+
+```
+scripts\publish-container.bat [tag]
+```
+
+The tag defaults to `latest`. Set `AGENT_KNOWLEDGE_BASE_REGISTRY_IMAGE` to the target image without a tag — either in the environment or as a line in the git-ignored `.env` file — for example `AGENT_KNOWLEDGE_BASE_REGISTRY_IMAGE=registry.example.com/namespace/agent-knowledge-base-mcp`. The registry host is never stored in the repository.
+
 ## Configuration
 
 | Variable | Default | Description |
