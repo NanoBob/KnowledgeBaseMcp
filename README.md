@@ -113,6 +113,12 @@ Every call needs the admin token in an `X-Admin-Token` header (or `Authorization
 
 `POST /admin/documents/{id}/move` keeps the document's name, content and revision history, so the name must be free in the target directory; it bumps the version and records a revision that carries the new `directoryId`.
 
+### Swagger UI
+
+The API is also browsable at `/swagger`, driven by the OpenAPI document at `/openapi/v1.json`. Both are served in every environment, including the container, and need no token themselves; only the calls made from the page do.
+
+Click **Authorize** and paste the admin token into the `X-Admin-Token` field. The UI keeps it across reloads, so every request can be sent from the page. Error responses carry the `AdminErrorResponse` envelope; a request the framework cannot bind answers with ProblemDetails as `application/problem+json`.
+
 ### Exporting and importing
 
 `POST /admin/transfer/export` takes `{ "directoryIds": ["…"] }` and returns a `.zip` holding `manifest.json` plus one `.md` file per document, filed under a folder named after its directory:
