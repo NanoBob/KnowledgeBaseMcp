@@ -291,7 +291,6 @@ public sealed class FakeApiKeyRepository : IApiKeyRepository
 public sealed class FakeGitHistoryStore : IGitHistoryStore
 {
     private readonly Dictionary<string, List<GitStoredCommit>> commits = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, GitStoredCommit> heads = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> blobs = new(StringComparer.Ordinal);
 
     /// <summary>Every blob currently stored, so a test can assert that pruning released the content.</summary>
@@ -300,14 +299,14 @@ public sealed class FakeGitHistoryStore : IGitHistoryStore
     /// <summary>The retained commits of a scope, newest first.</summary>
     public IReadOnlyList<GitStoredCommit> Commits(string scope) =>
         commits.TryGetValue(scope, out var stored)
-            ? [.. stored.OrderByDescending(c => c.When)]
+            ? [.. stored.AsEnumerable().Reverse().OrderByDescending(c => c.When)]
             : [];
-
-    public Task<GitStoredCommit?> GetHeadAsync(string scope, CancellationToken ct) =>
-        Task.FromResult(heads.TryGetValue(scope, out var head) ? head : null);
 
     public Task<GitStoredCommit?> FindCommitAsync(string scope, GitObjectId id, CancellationToken ct) =>
         Task.FromResult(Commits(scope).FirstOrDefault(c => string.Equals(c.Sha, id.ToString(), StringComparison.Ordinal)));
+
+    public Task<IReadOnlyList<GitStoredCommit>> GetHistoryAsync(string scope, int limit, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<GitStoredCommit>>([.. Commits(scope).Take(limit)]);
 
     public Task AppendAsync(
         string scope,
@@ -332,23 +331,21 @@ public sealed class FakeGitHistoryStore : IGitHistoryStore
             this.blobs[blob.Id] = blob.Content;
         }
 
-        heads[scope] = commit;
+        var kept = GitHistoryFold.Keep([.. stored.OrderByDescending(c => c.When)], depth);        var stale = stored.Except(kept).ToList();
 
-        var stale = stored.OrderByDescending(c => c.When).Skip(depth).ToList();
-        if (stale.Count == 0)
-        {
-            return Task.CompletedTask;
-        }
+        stored.Clear();
+        stored.AddRange(kept);
 
-        foreach (var old in stale)
-        {
-            stored.Remove(old);
-        }
+        var alive = stored
+            .SelectMany(c => c.Changes)
+            .Select(change => change.BlobId)
+            .OfType<string>()
+            .ToHashSet(StringComparer.Ordinal);
 
-        var alive = stored.SelectMany(c => c.Files).Select(f => f.BlobId).ToHashSet(StringComparer.Ordinal);
         foreach (var unused in stale
-                     .SelectMany(c => c.Files)
-                     .Select(f => f.BlobId)
+                     .SelectMany(c => c.Changes)
+                     .Select(change => change.BlobId)
+                     .OfType<string>()
                      .Distinct(StringComparer.Ordinal)
                      .Where(id => !alive.Contains(id)))
         {

@@ -7,31 +7,38 @@ using MongoDB.Driver;
 namespace AgentKnowledgeBase.Mcp.Storage;
 
 /// <summary>
-/// Keeps the commits that were served, per scope, so a clone can fast-forward instead of re-cloning. Blobs are
-/// shared between commits, so a snapshot that changes one document stores one new blob, not the whole tree.
+/// Keeps the commits that were served, per scope, so a clone can fast-forward instead of re-cloning. A commit
+/// stores only the files it changed, so a snapshot that edits one document adds one change, not a tree; blobs are
+/// shared between commits, so the content behind an unchanged file is stored once.
 /// </summary>
 public sealed class MongoGitHistoryStore(IMongoDatabase database) : IGitHistoryStore
 {
     public const string CommitCollectionName = "git_commits";
     public const string BlobCollectionName = "git_blobs";
-    public const string HeadCollectionName = "git_heads";
 
     private readonly IMongoCollection<GitCommitDocument> _commits =
         database.GetCollection<GitCommitDocument>(CommitCollectionName);
     private readonly IMongoCollection<GitBlobDocument> _blobs =
         database.GetCollection<GitBlobDocument>(BlobCollectionName);
-    private readonly IMongoCollection<GitHeadDocument> _heads =
-        database.GetCollection<GitHeadDocument>(HeadCollectionName);
-
-    public async Task<GitStoredCommit?> GetHeadAsync(string scope, CancellationToken ct)
-    {
-        var head = await _heads.Find(h => h.Id == scope).FirstOrDefaultAsync(ct).ConfigureAwait(false);
-
-        return head is null ? null : await FindByShaAsync(scope, head.Sha, ct).ConfigureAwait(false);
-    }
 
     public Task<GitStoredCommit?> FindCommitAsync(string scope, GitObjectId id, CancellationToken ct) =>
         FindByShaAsync(scope, id.ToString(), ct);
+
+    public async Task<IReadOnlyList<GitStoredCommit>> GetHistoryAsync(
+        string scope,
+        int limit,
+        CancellationToken ct)
+    {
+        var documents = await _commits
+            .Find(c => c.Scope == scope)
+            .SortByDescending(c => c.When)
+            .ThenByDescending(c => c.Id)
+            .Limit(limit)
+            .ToListAsync(ct)
+            .ConfigureAwait(false);
+
+        return [.. documents.Select(ToCommit)];
+    }
 
     public async Task AppendAsync(
         string scope,
@@ -64,12 +71,6 @@ public sealed class MongoGitHistoryStore(IMongoDatabase database) : IGitHistoryS
                 ct).ConfigureAwait(false);
         }
 
-        await _heads.UpdateOneAsync(
-            h => h.Id == scope,
-            Builders<GitHeadDocument>.Update.Set(h => h.Sha, commit.Sha),
-            new UpdateOptions { IsUpsert = true },
-            ct).ConfigureAwait(false);
-
         await PruneAsync(scope, depth, ct).ConfigureAwait(false);
     }
 
@@ -94,43 +95,75 @@ public sealed class MongoGitHistoryStore(IMongoDatabase database) : IGitHistoryS
     /// Drops the commits beyond <paramref name="depth"/> and then the blobs nothing references any more, so the
     /// stored history stays bounded even though every change adds a commit.
     /// </summary>
+    /// <remarks>
+    /// The oldest commit that stays is rewritten into a boundary carrying every file, because the commit it used
+    /// to be a difference against is about to be deleted and its tree still has to be rebuildable. One commit
+    /// past the window is loaded, which is all the fold needs: that commit is the previous boundary once the
+    /// window is full.
+    /// </remarks>
     private async Task PruneAsync(string scope, int depth, CancellationToken ct)
     {
-        var stale = await _commits
+        var window = await _commits
             .Find(c => c.Scope == scope)
             .SortByDescending(c => c.When)
-            .Skip(depth)
+            .ThenByDescending(c => c.Id)
+            .Limit(depth + 1)
             .ToListAsync(ct)
             .ConfigureAwait(false);
 
-        if (stale.Count == 0)
+        if (window.Count <= depth)
         {
             return;
         }
 
-        var staleIds = stale.Select(c => c.Id).ToList();
-        await _commits.DeleteManyAsync(c => staleIds.Contains(c.Id), ct).ConfigureAwait(false);
+        var history = window.Select(ToCommit).ToList();
+        var kept = GitHistoryFold.Keep(history, depth);
+
+        var stale = window.Skip(depth).ToList();
+        await _commits
+            .DeleteManyAsync(c => stale.Select(d => d.Id).Contains(c.Id), ct)
+            .ConfigureAwait(false);
+
+        var boundary = kept[^1];
+        if (!window[depth - 1].IsBoundary)
+        {
+            await _commits.UpdateOneAsync(
+                c => c.Scope == scope && c.Sha == boundary.Sha,
+                Builders<GitCommitDocument>.Update
+                    .Set(c => c.IsBoundary, true)
+                    .Set(c => c.Changes, Changes(boundary.Changes)),
+                cancellationToken: ct).ConfigureAwait(false);
+        }
 
         var candidates = stale
-            .SelectMany(c => c.Files)
-            .Select(f => f.Blob)
+            .SelectMany(c => c.Changes)
+            .Select(change => change.Blob)
+            .OfType<string>()
             .Distinct(StringComparer.Ordinal)
             .ToList();
 
-        if (candidates.Count == 0)
+        if (candidates.Count > 0)
         {
-            return;
+            await CollectBlobsAsync(candidates, ct).ConfigureAwait(false);
         }
+    }
 
+    /// <summary>
+    /// Deletes the blobs nothing references any more. Only the content the pruned commits held is considered, and
+    /// every scope is checked, because a blob is shared by every scope that serves the same document.
+    /// </summary>
+    private async Task CollectBlobsAsync(IReadOnlyCollection<string> candidates, CancellationToken ct)
+    {
         var stillReferenced = await _commits
-            .Find(Builders<GitCommitDocument>.Filter.In("Files.Blob", candidates))
-            .Project(c => c.Files)
+            .Find(Builders<GitCommitDocument>.Filter.In("Changes.Blob", candidates))
+            .Project(c => c.Changes)
             .ToListAsync(ct)
             .ConfigureAwait(false);
 
         var alive = stillReferenced
-            .SelectMany(files => files)
-            .Select(f => f.Blob)
+            .SelectMany(changes => changes)
+            .Select(change => change.Blob)
+            .OfType<string>()
             .ToHashSet(StringComparer.Ordinal);
 
         var unused = candidates.Where(id => !alive.Contains(id)).ToList();
@@ -147,19 +180,18 @@ public sealed class MongoGitHistoryStore(IMongoDatabase database) : IGitHistoryS
             .FirstOrDefaultAsync(ct)
             .ConfigureAwait(false);
 
-        if (document is null)
-        {
-            return null;
-        }
-
-        return new GitStoredCommit(
-            document.Sha,
-            document.Parent,
-            document.Tree,
-            document.Data,
-            new DateTimeOffset(DateTime.SpecifyKind(document.When, DateTimeKind.Utc), TimeSpan.Zero),
-            [.. document.Files.Select(f => new GitStoredFile(f.Path, f.Blob))]);
+        return document is null ? null : ToCommit(document);
     }
+
+    private static GitStoredCommit ToCommit(GitCommitDocument document) => new(
+        document.Sha,
+        document.Parent,
+        document.Tree,
+        new DateTimeOffset(DateTime.SpecifyKind(document.When, DateTimeKind.Utc), TimeSpan.Zero),
+        document.Documents,
+        document.Directories,
+        [.. document.Changes.Select(change => new GitStoredChange(change.Path, change.Blob))],
+        document.IsBoundary);
 
     private static GitCommitDocument ToDocument(string scope, GitStoredCommit commit) => new()
     {
@@ -167,10 +199,15 @@ public sealed class MongoGitHistoryStore(IMongoDatabase database) : IGitHistoryS
         Sha = commit.Sha,
         Parent = commit.Parent,
         Tree = commit.Tree,
-        Data = commit.Data,
         When = commit.When.UtcDateTime,
-        Files = [.. commit.Files.Select(f => new GitFileDocument { Path = f.Path, Blob = f.BlobId })]
+        Documents = commit.Documents,
+        Directories = commit.Directories,
+        Changes = Changes(commit.Changes),
+        IsBoundary = commit.IsBoundary
     };
+
+    private static List<GitChangeDocument> Changes(IReadOnlyList<GitStoredChange> changes) =>
+        [.. changes.Select(change => new GitChangeDocument { Path = change.Path, Blob = change.BlobId })];
 
     public static async Task EnsureIndexesAsync(IMongoDatabase database, CancellationToken ct)
     {
@@ -183,7 +220,7 @@ public sealed class MongoGitHistoryStore(IMongoDatabase database) : IGitHistoryS
                 new CreateIndexModel<GitCommitDocument>(
                     Builders<GitCommitDocument>.IndexKeys.Ascending(c => c.Scope).Descending(c => c.When)),
                 new CreateIndexModel<GitCommitDocument>(
-                    Builders<GitCommitDocument>.IndexKeys.Ascending("Files.Blob"))
+                    Builders<GitCommitDocument>.IndexKeys.Ascending("Changes.Blob"))
             ],
             cancellationToken: ct).ConfigureAwait(false);
     }
@@ -201,20 +238,33 @@ public sealed class GitCommitDocument
 
     public string Tree { get; set; } = "";
 
-    public byte[] Data { get; set; } = [];
-
     [BsonDateTimeOptions(Kind = DateTimeKind.Utc)]
     public DateTime When { get; set; }
 
-    public List<GitFileDocument> Files { get; set; } = [];
+    /// <summary>How many documents the snapshot held, which the commit message is rebuilt from.</summary>
+    public int Documents { get; set; }
+
+    public int Directories { get; set; }
+
+    /// <summary>
+    /// The files this commit added, changed or removed relative to its parent. A removal carries no blob, which
+    /// is how a deleted document stays visible in the history after the document itself is gone.
+    /// </summary>
+    public List<GitChangeDocument> Changes { get; set; } = [];
+
+    /// <summary>
+    /// Set when <see cref="Changes"/> carries every file rather than a difference, which is true of the first
+    /// commit of a scope and of the oldest commit that survives pruning.
+    /// </summary>
+    public bool IsBoundary { get; set; }
 }
 
-public sealed class GitFileDocument
+public sealed class GitChangeDocument
 {
     public string Path { get; set; } = "";
 
     /// <summary>The id of the blob holding the content, so identical content is stored once.</summary>
-    public string Blob { get; set; } = "";
+    public string? Blob { get; set; }
 }
 
 public sealed class GitBlobDocument
@@ -223,13 +273,4 @@ public sealed class GitBlobDocument
     public string Id { get; set; } = "";
 
     public string Content { get; set; } = "";
-}
-
-public sealed class GitHeadDocument
-{
-    /// <summary>The scope, which is the set of directories a key may read.</summary>
-    [BsonId]
-    public string Id { get; set; } = "";
-
-    public string Sha { get; set; } = "";
 }

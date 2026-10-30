@@ -43,7 +43,7 @@ public sealed class KnowledgeGitRepository(
         // fetch it again instead of re-cloning.
         var stored = await history.FindAsync(scope, id, CancellationToken.None).ConfigureAwait(false);
 
-        return stored is null ? null : GitCommit.Parse(stored.Data);
+        return stored is null ? null : history.Derive(stored);
     }
 
     public async ValueTask<GitTree> GetTreeAsync(GitCommit commit)

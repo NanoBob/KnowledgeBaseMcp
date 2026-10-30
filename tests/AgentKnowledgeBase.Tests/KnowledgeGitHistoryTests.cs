@@ -187,4 +187,111 @@ public class KnowledgeGitHistoryTests
             "Knowledge base snapshot: 0 documents in 0 directories",
             KnowledgeGitHistory.Message(KnowledgeSnapshot.Empty));
     }
+
+    [Fact]
+    public async Task A_stored_commit_rebuilds_to_the_id_it_was_served_with()
+    {
+        var store = new FakeGitHistoryStore();
+        var history = new KnowledgeGitHistory(store, new GitOptions());
+
+        var served = await history.ResolveAsync(Scope, Snapshot("one"), default);
+        await history.ResolveAsync(Scope, Snapshot("two"), default);
+
+        var stored = await history.FindAsync(Scope, served.Commit.Id, default);
+
+        Assert.NotNull(stored);
+        Assert.Equal(served.Commit.Id, history.Derive(stored).Id);
+    }
+
+    [Fact]
+    public void A_stored_commit_that_no_longer_rebuilds_is_refused()
+    {
+        var history = new KnowledgeGitHistory(new FakeGitHistoryStore(), new GitOptions());
+
+        var stored = new GitStoredCommit(
+            new string('0', 40),
+            null,
+            new string('1', 40),
+            ChangedAt,
+            1,
+            1,
+            [],
+            IsBoundary: true);
+
+        Assert.Throws<InvalidOperationException>(() => history.Derive(stored));
+    }
+
+    [Fact]
+    public async Task A_removed_document_is_remembered_as_a_removal()
+    {
+        var store = new FakeGitHistoryStore();
+        var history = new KnowledgeGitHistory(store, new GitOptions());
+
+        await history.ResolveAsync(Scope, TwoDocuments(), default);
+        await history.ResolveAsync(Scope, Snapshot("one"), default);
+
+        var head = store.Commits(Scope)[0];
+
+        Assert.Contains(head.Changes, change => change.Path == "alpha/two.md" && change.BlobId is null);
+        Assert.DoesNotContain(head.Changes, change => change.Path == "alpha/one.md");
+    }
+
+    [Fact]
+    public async Task The_oldest_retained_commit_carries_every_file_after_pruning()
+    {
+        var store = new FakeGitHistoryStore();
+        var history = new KnowledgeGitHistory(store, new GitOptions { HistoryDepth = 2 });
+
+        await history.ResolveAsync(Scope, Snapshot("one"), default);
+        var middle = await history.ResolveAsync(Scope, Snapshot("two"), default);
+        await history.ResolveAsync(Scope, Snapshot("three"), default);
+
+        var retained = store.Commits(Scope);
+
+        Assert.Equal(2, retained.Count);
+        Assert.True(retained[^1].IsBoundary);
+        Assert.Equal(middle.Commit.Id.ToString(), retained[^1].Sha);
+
+        var tree = await history.GetTreeAsync(Scope, retained[^1], default);
+        var document = tree.GetFile("alpha/one.md");
+
+        Assert.NotNull(document);
+        Assert.Equal("two", (await document.ReadStringAsync()).Trim());
+    }
+
+    [Fact]
+    public async Task Pruning_does_not_append_a_commit_for_an_unchanged_snapshot()
+    {
+        var store = new FakeGitHistoryStore();
+        var history = new KnowledgeGitHistory(store, new GitOptions { HistoryDepth = 2 });
+
+        await history.ResolveAsync(Scope, Snapshot("one"), default);
+        await history.ResolveAsync(Scope, Snapshot("two"), default);
+        var newest = await history.ResolveAsync(Scope, Snapshot("three"), default);
+        var again = await history.ResolveAsync(Scope, Snapshot("three"), default);
+
+        Assert.Equal(newest.Commit.Id, again.Commit.Id);
+        Assert.Equal(2, store.Commits(Scope).Count);
+    }
+
+    [Fact]
+    public void A_history_that_never_reaches_a_boundary_is_refused()
+    {
+        var changes = new List<GitStoredCommit>
+        {
+            new("head", "parent", "tree", ChangedAt, 1, 1, [new GitStoredChange("alpha/one.md", "blob")], false),
+            new("parent", "grandparent", "tree", ChangedAt, 1, 1, [], false)
+        };
+
+        Assert.Throws<InvalidOperationException>(() => GitHistoryFold.Files(changes));
+    }
+
+    private static KnowledgeSnapshot TwoDocuments() =>
+        new(
+            [new TransferDirectory("alpha", "alpha documents")],
+            [
+                new KnowledgeSnapshotDocument("alpha", "one", "a summary", [], "alpha/one.md", "one"),
+                new KnowledgeSnapshotDocument("alpha", "two", "a summary", [], "alpha/two.md", "two")
+            ],
+            ChangedAt);
 }
