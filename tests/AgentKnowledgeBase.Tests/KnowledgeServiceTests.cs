@@ -1,3 +1,4 @@
+using System.Text.Json;
 using AgentKnowledgeBase.Mcp.Domain;
 using AgentKnowledgeBase.Mcp.Services;
 
@@ -302,7 +303,7 @@ public class KnowledgeServiceTests
         await _service.StoreAsync(admin, Create(team, "A"), default);
         await _service.StoreAsync(admin, Create(other, "B"), default);
 
-        var visible = await _service.ListAsync(Caller(R(team)), null, default);
+        var visible = await _service.ListAsync(Caller(R(team)), null, null, null, default);
 
         Assert.Single(visible);
         Assert.Equal("A", visible[0].Name);
@@ -318,7 +319,7 @@ public class KnowledgeServiceTests
         await _service.StoreAsync(admin, Create(team, "A"), default);
         await _service.StoreAsync(admin, Create(other, "B"), default);
 
-        var result = await _service.ListAsync(admin, other, default);
+        var result = await _service.ListAsync(admin, other, null, null, default);
 
         Assert.Single(result);
         Assert.Equal("B", result[0].Name);
@@ -462,7 +463,7 @@ public class KnowledgeServiceTests
         var detail = await _service.GetAsync(ApiCaller.Admin, created.Id, default);
 
         Assert.Equal("Doc", detail.Name);
-        Assert.Single(await _service.ListAsync(ApiCaller.Admin, null, default));
+        Assert.Single(await _service.ListAsync(ApiCaller.Admin, null, null, null, default));
     }
 
     [Fact]
@@ -584,5 +585,370 @@ public class KnowledgeServiceTests
             _service.MoveAsync(Caller(Rw(target)), created.Id, target, null, default));
 
         Assert.Equal(KnowledgeErrorKind.NotFound, ex.Kind);
+    }
+
+    private static StoreRequest Doc(
+        Guid directoryId,
+        string name,
+        string content,
+        string summary = "no summary",
+        params string[] tags) =>
+        new(null, directoryId, name, summary, tags.Length == 0 ? ["note"] : tags, content, null);
+
+    private Task<SearchResult> Search(
+        ApiCaller caller,
+        string query,
+        Guid? directoryId = null,
+        int? limit = null,
+        int? snippetLimit = null) =>
+        _service.SearchAsync(caller, query, directoryId, limit, snippetLimit, default);
+
+    private async Task<Guid> CreateDocAsync(Guid directoryId, StoreRequest request) =>
+        (await _service.StoreAsync(Caller(Rw(directoryId)), request, default)).Id;
+
+    [Fact]
+    public async Task Search_FindsMatchInContent()
+    {
+        var directoryId = await CreateDirectoryAsync("team");
+        await CreateDocAsync(directoryId, Doc(directoryId, "Threading", "always ConfigureAwait(false) in libraries"));
+
+        var result = await Search(Caller(R(directoryId)), "configureawait");
+
+        var match = Assert.Single(result.Matches);
+        Assert.Equal("Threading", match.Name);
+        Assert.Equal("team", match.DirectoryName);
+        Assert.Equal(1, match.Version);
+        Assert.Equal(1, match.MatchCount);
+        var snippet = Assert.Single(match.Snippets);
+        Assert.Equal(1, snippet.Line);
+        Assert.Equal("always ConfigureAwait(false) in libraries", snippet.Text);
+        Assert.False(result.Truncated);
+    }
+
+    [Fact]
+    public async Task Search_FindsMatchInNameWithoutSnippets()
+    {
+        var directoryId = await CreateDirectoryAsync("team");
+        await CreateDocAsync(directoryId, Doc(directoryId, "ConfigureAwait notes", "body"));
+
+        var match = Assert.Single((await Search(Caller(R(directoryId)), "configureawait")).Matches);
+
+        Assert.Equal(1, match.MatchCount);
+        Assert.Empty(match.Snippets);
+    }
+
+    [Fact]
+    public async Task Search_FindsMatchInSummary()
+    {
+        var directoryId = await CreateDirectoryAsync("team");
+        await CreateDocAsync(directoryId,
+            Doc(directoryId, "Threading", "body", summary: "prefer ConfigureAwait in libraries"));
+
+        var match = Assert.Single((await Search(Caller(R(directoryId)), "configureawait")).Matches);
+
+        Assert.Equal(1, match.MatchCount);
+        Assert.Empty(match.Snippets);
+    }
+
+    [Fact]
+    public async Task Search_FindsMatchInTag()
+    {
+        var directoryId = await CreateDirectoryAsync("team");
+        await CreateDocAsync(directoryId, Doc(directoryId, "Threading", "body", tags: ["configureawait"]));
+
+        var match = Assert.Single((await Search(Caller(R(directoryId)), "ConfigureAwait")).Matches);
+
+        Assert.Equal(1, match.MatchCount);
+        Assert.Equal(new[] { "configureawait" }, match.Tags);
+    }
+
+    [Fact]
+    public async Task Search_CountsEveryOccurrenceAcrossFields()
+    {
+        var directoryId = await CreateDirectoryAsync("team");
+        await CreateDocAsync(directoryId,
+            Doc(
+                directoryId,
+                "needle needle",
+                "needle here\nnothing\nanother needle",
+                summary: "a needle",
+                tags: ["needle"]));
+
+        var match = Assert.Single((await Search(Caller(R(directoryId)), "needle")).Matches);
+
+        Assert.Equal(6, match.MatchCount);
+        Assert.Equal(new[] { 1, 3 }, match.Snippets.Select(s => s.Line));
+    }
+
+    [Fact]
+    public async Task Search_NarrowsToDirectoryId()
+    {
+        var team = await CreateDirectoryAsync("team");
+        var other = await CreateDirectoryAsync("other");
+        await CreateDocAsync(team, Doc(team, "Team doc", "needle"));
+        await CreateDocAsync(other, Doc(other, "Other doc", "needle"));
+
+        var result = await Search(Caller(Rw(team), Rw(other)), "needle", other);
+
+        var match = Assert.Single(result.Matches);
+        Assert.Equal("Other doc", match.Name);
+    }
+
+    [Fact]
+    public async Task Search_NeverRevealsMatchesOrCountsFromUnreadableDirectories()
+    {
+        var team = await CreateDirectoryAsync("team");
+        var other = await CreateDirectoryAsync("other");
+        await CreateDocAsync(team, Doc(team, "Team doc", "needle needle needle"));
+        await CreateDocAsync(other, Doc(other, "Other doc", "needle\nneedle\nneedle\nneedle\nneedle"));
+
+        var result = await Search(Caller(R(team)), "needle");
+
+        var match = Assert.Single(result.Matches);
+        Assert.Equal("Team doc", match.Name);
+        Assert.Equal(3, match.MatchCount);
+        Assert.Single(match.Snippets);
+    }
+
+    [Fact]
+    public async Task Search_WhenOnlyTheUnreadableDirectoryMatches_ReturnsNothing()
+    {
+        var team = await CreateDirectoryAsync("team");
+        var other = await CreateDirectoryAsync("other");
+        await CreateDocAsync(other, Doc(other, "Other doc", "needle"));
+
+        var result = await Search(Caller(R(team)), "needle");
+
+        Assert.Empty(result.Matches);
+        Assert.False(result.Truncated);
+    }
+
+    [Fact]
+    public async Task Search_OfAnUnreadableDirectory_ReturnsNothing()
+    {
+        var team = await CreateDirectoryAsync("team");
+        var other = await CreateDirectoryAsync("other");
+        await CreateDocAsync(other, Doc(other, "Other doc", "needle"));
+
+        var result = await Search(Caller(R(team)), "needle", other);
+
+        Assert.Empty(result.Matches);
+    }
+
+    [Fact]
+    public async Task Search_WithoutMatches_ReturnsAnEmptyResult()
+    {
+        var directoryId = await CreateDirectoryAsync("team");
+        await CreateDocAsync(directoryId, Doc(directoryId, "Doc", "body"));
+
+        var result = await Search(Caller(R(directoryId)), "absent-term");
+
+        Assert.Empty(result.Matches);
+        Assert.False(result.Truncated);
+    }
+
+    [Theory]
+    [InlineData("a.b")]
+    [InlineData("(")]
+    [InlineData("*")]
+    public async Task Search_TreatsRegexMetacharactersLiterally(string query)
+    {
+        var directoryId = await CreateDirectoryAsync("team");
+        await CreateDocAsync(directoryId, Doc(directoryId, "Literal", $"literal {query} here"));
+        await CreateDocAsync(directoryId, Doc(directoryId, "Decoy", "literal axb here"));
+
+        var match = Assert.Single((await Search(Caller(R(directoryId)), query)).Matches);
+
+        Assert.Equal("Literal", match.Name);
+    }
+
+    [Theory]
+    [InlineData("first\nneedle\nlast")]
+    [InlineData("first\r\nneedle\r\nlast")]
+    public async Task Search_ReportsOneBasedLineNumbersForEitherLineEnding(string content)
+    {
+        var directoryId = await CreateDirectoryAsync("team");
+        await CreateDocAsync(directoryId, Doc(directoryId, "Doc", content));
+
+        var snippet = Assert.Single(Assert.Single((await Search(Caller(R(directoryId)), "needle")).Matches).Snippets);
+
+        Assert.Equal(2, snippet.Line);
+        Assert.Equal("needle", snippet.Text);
+    }
+
+    [Fact]
+    public async Task Search_TrimsLongLinesAroundTheMatch()
+    {
+        var directoryId = await CreateDirectoryAsync("team");
+        await CreateDocAsync(directoryId, Doc(directoryId, "Doc", new string('x', 250) + "needle" + new string('y', 144)));
+
+        var snippet = Assert.Single(Assert.Single((await Search(Caller(R(directoryId)), "needle")).Matches).Snippets);
+
+        Assert.Equal(200, snippet.Text.Length);
+        Assert.StartsWith("…", snippet.Text);
+        Assert.EndsWith("…", snippet.Text);
+        Assert.Contains("needle", snippet.Text);
+    }
+
+    [Fact]
+    public async Task Search_ClampsLimitToItsMaximum()
+    {
+        var directoryId = await CreateDirectoryAsync("team");
+        for (var index = 0; index < 60; index++)
+        {
+            await CreateDocAsync(directoryId, Doc(directoryId, $"Doc {index:00}", "needle"));
+        }
+
+        var result = await Search(Caller(R(directoryId)), "needle", limit: 1000);
+
+        Assert.Equal(50, result.Matches.Count);
+        Assert.True(result.Truncated);
+    }
+
+    [Fact]
+    public async Task Search_DefaultsToTenDocuments()
+    {
+        var directoryId = await CreateDirectoryAsync("team");
+        for (var index = 0; index < 15; index++)
+        {
+            await CreateDocAsync(directoryId, Doc(directoryId, $"Doc {index:00}", "needle"));
+        }
+
+        var result = await Search(Caller(R(directoryId)), "needle");
+
+        Assert.Equal(10, result.Matches.Count);
+        Assert.True(result.Truncated);
+    }
+
+    [Fact]
+    public async Task Search_ClampsSnippetLimitToItsMaximum()
+    {
+        var directoryId = await CreateDirectoryAsync("team");
+        await CreateDocAsync(directoryId, Doc(directoryId, "Doc", string.Join("\n", Enumerable.Repeat("needle", 10))));
+
+        var result = await Search(Caller(R(directoryId)), "needle", snippetLimit: 100);
+
+        var match = Assert.Single(result.Matches);
+        Assert.Equal(5, match.Snippets.Count);
+        Assert.True(result.Truncated);
+    }
+
+    [Fact]
+    public async Task Search_OrdersByMatchCountThenName()
+    {
+        var directoryId = await CreateDirectoryAsync("team");
+        await CreateDocAsync(directoryId, Doc(directoryId, "Bravo", "needle"));
+        await CreateDocAsync(directoryId, Doc(directoryId, "Alpha", "needle"));
+        await CreateDocAsync(directoryId, Doc(directoryId, "Zulu", "needle\nneedle"));
+
+        var result = await Search(Caller(R(directoryId)), "needle");
+
+        Assert.Equal(new[] { "Zulu", "Alpha", "Bravo" }, result.Matches.Select(m => m.Name));
+    }
+
+    [Fact]
+    public async Task Search_OrderingIsStableAcrossRuns()
+    {
+        var directoryId = await CreateDirectoryAsync("team");
+        foreach (var name in new[] { "Delta", "Alpha", "Charlie", "Bravo" })
+        {
+            await CreateDocAsync(directoryId, Doc(directoryId, name, "needle"));
+        }
+
+        var runs = new List<List<Guid>>();
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            runs.Add((await Search(Caller(R(directoryId)), "needle")).Matches.Select(m => m.Id).ToList());
+        }
+
+        Assert.Equal(new[] { "Alpha", "Bravo", "Charlie", "Delta" },
+            (await Search(Caller(R(directoryId)), "needle")).Matches.Select(m => m.Name));
+        Assert.All(runs, run => Assert.Equal(runs[0], run));
+    }
+
+    [Fact]
+    public async Task Search_BroadQueryOverALargeCorpus_ReturnsASmallResponse()
+    {
+        var directoryId = await CreateDirectoryAsync("bulk");
+        var content = string.Join("\n", Enumerable.Repeat("needle " + new string('x', 112), 10));
+        for (var index = 0; index < 200; index++)
+        {
+            await CreateDocAsync(directoryId, Doc(directoryId, $"Doc {index:000}", content, tags: ["bulk"]));
+        }
+
+        var result = await Search(Caller(R(directoryId)), "needle");
+        var serialized = JsonSerializer.Serialize(result);
+
+        Assert.Equal(10, result.Matches.Count);
+        Assert.True(result.Truncated);
+        Assert.True(serialized.Length < 4096, $"search response was {serialized.Length} characters");
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task Search_WithoutAQuery_IsValidationError(string query)
+    {
+        var directoryId = await CreateDirectoryAsync("team");
+
+        var ex = await Assert.ThrowsAsync<KnowledgeException>(() => Search(Caller(R(directoryId)), query));
+
+        Assert.Equal(KnowledgeErrorKind.Validation, ex.Kind);
+    }
+
+    [Fact]
+    public async Task List_PagesThroughEveryDocumentWithoutGapsOrRepeats()
+    {
+        var directoryId = await CreateDirectoryAsync("team");
+        for (var index = 0; index < 7; index++)
+        {
+            await CreateDocAsync(directoryId, Doc(directoryId, $"Doc {index}", "body"));
+        }
+
+        const int pageSize = 3;
+        var paged = new List<Guid>();
+        for (var offset = 0; ; offset += pageSize)
+        {
+            var page = await _service.ListAsync(Caller(R(directoryId)), null, pageSize, offset, default);
+            paged.AddRange(page.Select(d => d.Id));
+            if (page.Count < pageSize)
+            {
+                break;
+            }
+        }
+
+        var unpaged = await _service.ListAsync(Caller(R(directoryId)), null, null, null, default);
+
+        Assert.Equal(7, paged.Count);
+        Assert.Equal(paged.Distinct().Count(), paged.Count);
+        Assert.Equal(unpaged.Select(d => d.Id), paged);
+    }
+
+    [Fact]
+    public async Task List_WithoutPaging_ReturnsEveryDocument()
+    {
+        var directoryId = await CreateDirectoryAsync("team");
+        for (var index = 0; index < 7; index++)
+        {
+            await CreateDocAsync(directoryId, Doc(directoryId, $"Doc {index}", "body"));
+        }
+
+        var result = await _service.ListAsync(Caller(R(directoryId)), null, null, null, default);
+
+        Assert.Equal(7, result.Count);
+    }
+
+    [Fact]
+    public async Task List_WithOffsetPastTheEnd_ReturnsNothing()
+    {
+        var directoryId = await CreateDirectoryAsync("team");
+        for (var index = 0; index < 3; index++)
+        {
+            await CreateDocAsync(directoryId, Doc(directoryId, $"Doc {index}", "body"));
+        }
+
+        var result = await _service.ListAsync(Caller(R(directoryId)), null, 5, 10, default);
+
+        Assert.Empty(result);
     }
 }

@@ -15,11 +15,14 @@ Three entities, all identified by GUID:
 | Tool | Purpose |
 |------|---------|
 | `list_knowledge_directories` | List the directories the key can read, with its `access` level (`read` or `readwrite`) per directory. Results are ordered by name. |
-| `list_knowledge_documents` | List documents the key can read. Optional `directoryId`. |
+| `list_knowledge_documents` | List documents the key can read. Optional `directoryId`, `limit` and `offset` for paging. |
+| `search_knowledge` | Search readable documents for a literal, case-insensitive substring of `name`, `summary`, `tags` or `content`. Returns matching documents with `matchCount` and up to `snippetLimit` line-numbered content snippets. Optional `directoryId`, `limit` (documents, default 10, max 50) and `snippetLimit` (default 3, max 5). `truncated` is true when a cap hid results. |
 | `get_knowledge_document` | Get one document by `id`, including markdown `content`. |
 | `store_knowledge_document` | Create or update a document. Updates require `expectedVersion`. |
 
 Creating a document requires `directoryId`, `name`, and `content`; the `id` is generated, so any agent with write access can add documents to its directories. Updating requires the `id` and the `version` you last read. A stale version returns a `409` telling the agent the document changed since it read it, so it refetches the document and re-applies its changes rather than overwriting the other agent's edit. An update replaces `summary`, `tags`, and `content`, so omitting `summary` clears it; omitting `name` keeps the current one. The agent tools never move a document between directories — that is an admin action (`POST /admin/documents/{id}/move` or the admin UI).
+
+`search_knowledge` exists so an agent can find a document without reading the whole catalogue: it returns only the matching documents and the matching content lines, so a broad query costs a few KB instead of a context window. A paging caller of `list_knowledge_documents` repeats with `offset` increased by `limit` until fewer than `limit` rows come back; omitting both still returns every document.
 
 ## Run with Docker Compose
 
@@ -209,7 +212,7 @@ Example client configuration (Streamable HTTP):
 
 - Directory names are lowercase `a-z`, `0-9`, `.`, `_`, `-`, up to 64 characters, and unique. Directories never nest.
 - Document names are free text up to 200 characters and unique per directory, ignoring case. Summary up to 500 characters. Content up to 100 KB.
-- Documents outside a key's directories are invisible: they do not appear in listings, and `get` returns "not found".
+- Documents outside a key's directories are invisible: they do not appear in listings or search results (not even as a match count), and `get` returns "not found".
 
 ## Development
 

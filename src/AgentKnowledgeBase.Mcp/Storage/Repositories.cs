@@ -1,5 +1,7 @@
 using System.Runtime.CompilerServices;
+using System.Text.RegularExpressions;
 using AgentKnowledgeBase.Mcp.Domain;
+using MongoDB.Bson;
 using MongoDB.Driver;
 
 namespace AgentKnowledgeBase.Mcp.Storage;
@@ -50,6 +52,15 @@ public interface IDocumentRepository
     /// </summary>
     IAsyncEnumerable<KnowledgeDocument> StreamByDirectoryIdsAsync(
         IReadOnlyCollection<Guid>? directoryIds,
+        CancellationToken ct);
+
+    /// <summary>
+    /// Full documents whose name, summary, tags or content contain <paramref name="query"/> as a literal,
+    /// case-insensitive substring, for the requested directories. Pass null for every directory.
+    /// </summary>
+    Task<List<KnowledgeDocument>> SearchAsync(
+        IReadOnlyCollection<Guid>? directoryIds,
+        string query,
         CancellationToken ct);
 
     Task<KnowledgeDocument?> FindAsync(Guid id, CancellationToken ct);
@@ -191,6 +202,36 @@ public sealed class MongoDocumentRepository(IMongoDatabase database) : IDocument
 
     public async Task<KnowledgeDocument?> FindAsync(Guid id, CancellationToken ct) =>
         await _documents.Find(d => d.Id == id).FirstOrDefaultAsync(ct);
+
+    public Task<List<KnowledgeDocument>> SearchAsync(
+        IReadOnlyCollection<Guid>? directoryIds,
+        string query,
+        CancellationToken ct)
+    {
+        if (directoryIds is { Count: 0 })
+        {
+            return Task.FromResult(new List<KnowledgeDocument>());
+        }
+
+        // A $text index cannot serve this: agents search for identifiers such as 'ConfigureAwait', which
+        // tokenising and stemming would never match inside a word. The corpus is small, so an escaped
+        // regex filtered scan is both exact and cheap enough.
+        var pattern = new BsonRegularExpression(Regex.Escape(query), "i");
+        var filter = Builders<KnowledgeDocument>.Filter.Or(
+            Builders<KnowledgeDocument>.Filter.Regex(nameof(KnowledgeDocument.Name), pattern),
+            Builders<KnowledgeDocument>.Filter.Regex(nameof(KnowledgeDocument.Summary), pattern),
+            Builders<KnowledgeDocument>.Filter.Regex(nameof(KnowledgeDocument.Tags), pattern),
+            Builders<KnowledgeDocument>.Filter.Regex(nameof(KnowledgeDocument.Content), pattern));
+
+        if (directoryIds is not null)
+        {
+            filter &= Builders<KnowledgeDocument>.Filter.In(d => d.DirectoryId, directoryIds);
+        }
+
+        return _documents.Find(filter)
+            .SortBy(d => d.DirectoryId).ThenBy(d => d.Name)
+            .ToListAsync(ct);
+    }
 
     public async IAsyncEnumerable<KnowledgeDocument> StreamByDirectoryIdsAsync(
         IReadOnlyCollection<Guid>? directoryIds,

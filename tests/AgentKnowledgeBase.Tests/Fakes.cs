@@ -83,8 +83,30 @@ public sealed class FakeDocumentRepository : IDocumentRepository
         CancellationToken ct) =>
         Task.FromResult(Documents.Values
             .Where(d => directoryIds is null || directoryIds.Contains(d.DirectoryId))
+            .OrderBy(d => d.DirectoryId)
+            .ThenBy(d => d.Name, NameComparer)
             .Select(Summary)
             .ToList());
+
+    /// <summary>Mirrors the Mongo query: a literal, case-insensitive substring match over name, summary, tags
+    /// and content, narrowed to the readable directories.</summary>
+    public Task<List<KnowledgeDocument>> SearchAsync(
+        IReadOnlyCollection<Guid>? directoryIds,
+        string query,
+        CancellationToken ct) =>
+        Task.FromResult(Documents.Values
+            .Where(d => directoryIds is null || directoryIds.Contains(d.DirectoryId))
+            .Where(d => Matches(d, query))
+            .OrderBy(d => d.DirectoryId)
+            .ThenBy(d => d.Name, NameComparer)
+            .Select(Clone)
+            .ToList());
+
+    private static bool Matches(KnowledgeDocument d, string query) =>
+        d.Name.Contains(query, StringComparison.OrdinalIgnoreCase)
+        || d.Summary.Contains(query, StringComparison.OrdinalIgnoreCase)
+        || d.Content.Contains(query, StringComparison.OrdinalIgnoreCase)
+        || d.Tags.Any(tag => tag.Contains(query, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>Mongo projects the content out of a summary query; the fake does too, so a planner that reads
     /// content from a summary fails here instead of only in production.</summary>

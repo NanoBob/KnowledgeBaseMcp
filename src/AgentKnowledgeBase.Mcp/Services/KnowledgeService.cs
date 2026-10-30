@@ -27,6 +27,20 @@ public sealed record DocumentDetail(
     string CreatedBy,
     string UpdatedBy);
 
+/// <summary>One matching content line, with its 1-based line number.</summary>
+public sealed record SearchSnippet(int Line, string Text);
+
+public sealed record SearchMatch(
+    Guid Id,
+    string Name,
+    string DirectoryName,
+    IReadOnlyList<string> Tags,
+    int Version,
+    int MatchCount,
+    IReadOnlyList<SearchSnippet> Snippets);
+
+public sealed record SearchResult(IReadOnlyList<SearchMatch> Matches, bool Truncated);
+
 public sealed record StoreRequest(
     Guid? Id,
     Guid? DirectoryId,
@@ -60,35 +74,44 @@ public sealed record RevisionDetail(
 
 public sealed class KnowledgeService(IDocumentRepository documents, IDirectoryRepository directories)
 {
+    private const int DefaultSearchLimit = 10;
+    private const int MaxSearchLimit = 50;
+    private const int DefaultSnippetLimit = 3;
+    private const int MaxSnippetLimit = 5;
+    private const int SnippetWidth = 200;
+
+    /// <summary>
+    /// Keeps a broad search's snippets small enough that an agent can afford to iterate: with the default ten
+    /// documents the whole result stays under about 4 KB, instead of one context window.
+    /// </summary>
+    private const int SnippetCharacterBudget = 1500;
+
     public async Task<IReadOnlyList<DocumentSummary>> ListAsync(
         ApiCaller caller,
         Guid? directoryId,
+        int? limit,
+        int? offset,
         CancellationToken ct)
     {
-        var readable = caller.ReadableDirectoryIds;
+        var readable = ReadableScope(caller, directoryId);
         if (readable is { Count: 0 })
         {
             return [];
         }
 
-        // A single requested directory and the caller's readable set are intersected here, so the
-        // repository never receives two filters that could contradict each other.
-        if (directoryId is { } only)
+        var take = limit ?? int.MaxValue;
+        if (take <= 0)
         {
-            if (readable is not null && !readable.Contains(only))
-            {
-                return [];
-            }
-
-            readable = [only];
+            return [];
         }
 
         var documentsPage = await documents.ListSummariesAsync(readable, ct);
+        var page = documentsPage.Skip(Math.Max(0, offset ?? 0)).Take(take).ToList();
         var directoryNames = await LoadDirectoryNamesAsync(
-            documentsPage.Select(d => d.DirectoryId).Distinct().ToList(),
+            page.Select(d => d.DirectoryId).Distinct().ToList(),
             ct);
 
-        return documentsPage
+        return page
             .Select(d => new DocumentSummary(
                 d.Id,
                 d.DirectoryId,
@@ -99,6 +122,102 @@ public sealed class KnowledgeService(IDocumentRepository documents, IDirectoryRe
                 d.Version,
                 d.UpdatedAt))
             .ToList();
+    }
+
+    /// <summary>
+    /// Literal, case-insensitive substring search across each readable document's name, summary, tags and
+    /// content. Snippets are content lines only: a document that matches in its metadata alone still
+    /// appears, with no snippets, because its name and summary are already in the result.
+    /// </summary>
+    public async Task<SearchResult> SearchAsync(
+        ApiCaller caller,
+        string query,
+        Guid? directoryId,
+        int? limit,
+        int? snippetLimit,
+        CancellationToken ct)
+    {
+        var term = (query ?? "").Trim();
+        if (term.Length == 0)
+        {
+            throw KnowledgeException.Validation("query is required: pass the text to search for.");
+        }
+
+        var readable = ReadableScope(caller, directoryId);
+        if (readable is { Count: 0 })
+        {
+            return new SearchResult([], Truncated: false);
+        }
+
+        var ranked = (await documents.SearchAsync(readable, term, ct))
+            .Select(d => (Document: d, MatchCount: CountMatches(d, term)))
+            .Where(m => m.MatchCount > 0)
+            .OrderByDescending(m => m.MatchCount)
+            .ThenBy(m => m.Document.Name, StringComparer.Ordinal)
+            .ThenBy(m => m.Document.Id)
+            .ToList();
+
+        var take = Math.Clamp(limit ?? DefaultSearchLimit, 1, MaxSearchLimit);
+        var snippetsPerDocument = Math.Clamp(snippetLimit ?? DefaultSnippetLimit, 1, MaxSnippetLimit);
+        var truncated = ranked.Count > take;
+        var page = ranked.Take(take).ToList();
+
+        var directoryNames = await LoadDirectoryNamesAsync(
+            page.Select(m => m.Document.DirectoryId).Distinct().ToList(),
+            ct);
+
+        var remaining = SnippetCharacterBudget;
+        var budgetSpent = false;
+
+        List<SearchSnippet> SnippetsFor(string content)
+        {
+            var snippets = new List<SearchSnippet>();
+            if (budgetSpent)
+            {
+                return snippets;
+            }
+
+            foreach (var (number, text) in ContentLines(content))
+            {
+                var index = text.IndexOf(term, StringComparison.OrdinalIgnoreCase);
+                if (index < 0)
+                {
+                    continue;
+                }
+
+                if (snippets.Count == snippetsPerDocument)
+                {
+                    truncated = true;
+                    break;
+                }
+
+                var snippet = SnippetText(text, index);
+                if (snippet.Length > remaining)
+                {
+                    budgetSpent = true;
+                    truncated = true;
+                    break;
+                }
+
+                remaining -= snippet.Length;
+                snippets.Add(new SearchSnippet(number, snippet));
+            }
+
+            return snippets;
+        }
+
+        var matches = page
+            .Select(m => new SearchMatch(
+                m.Document.Id,
+                m.Document.Name,
+                DirectoryName(directoryNames, m.Document.DirectoryId),
+                m.Document.Tags,
+                m.Document.Version,
+                m.MatchCount,
+                SnippetsFor(m.Document.Content)))
+            .ToList();
+
+        return new SearchResult(matches, truncated);
     }
 
     public async Task<DocumentDetail> GetAsync(ApiCaller caller, Guid id, CancellationToken ct)
@@ -445,4 +564,73 @@ public sealed class KnowledgeService(IDocumentRepository documents, IDirectoryRe
 
     private static string DirectoryName(Dictionary<Guid, string> names, Guid directoryId) =>
         names.TryGetValue(directoryId, out var name) ? name : "";
+
+    /// <summary>
+    /// The directories the caller may read, narrowed to <paramref name="directoryId"/> when one is
+    /// requested. Null means every directory; an empty collection means nothing is readable. A single
+    /// requested directory and the caller's readable set are intersected here, so the repository never
+    /// receives two filters that could contradict each other.
+    /// </summary>
+    private static IReadOnlyCollection<Guid>? ReadableScope(ApiCaller caller, Guid? directoryId)
+    {
+        var readable = caller.ReadableDirectoryIds;
+        if (readable is { Count: 0 } || directoryId is not { } only)
+        {
+            return readable;
+        }
+
+        if (readable is not null && !readable.Contains(only))
+        {
+            return [];
+        }
+
+        return [only];
+    }
+
+    private static int CountMatches(KnowledgeDocument document, string term) =>
+        CountOccurrences(document.Name, term)
+        + CountOccurrences(document.Summary, term)
+        + document.Tags.Sum(occurrences => CountOccurrences(occurrences, term))
+        + CountOccurrences(document.Content, term);
+
+    private static int CountOccurrences(string text, string term)
+    {
+        var count = 0;
+        var index = 0;
+        while (term.Length > 0 && (index = text.IndexOf(term, index, StringComparison.OrdinalIgnoreCase)) >= 0)
+        {
+            count++;
+            index += term.Length;
+        }
+
+        return count;
+    }
+
+    /// <summary>Splits on every line ending, so CRLF and LF content report the same line numbers.</summary>
+    private static IEnumerable<(int Number, string Text)> ContentLines(string content)
+    {
+        var lines = content.ReplaceLineEndings("\n").Split('\n');
+        for (var index = 0; index < lines.Length; index++)
+        {
+            yield return (index + 1, lines[index]);
+        }
+    }
+
+    /// <summary>
+    /// Keeps a long line to <see cref="SnippetWidth"/> characters around the match, so the snippet shows
+    /// why the document matched instead of the first 200 characters of the line.
+    /// </summary>
+    private static string SnippetText(string line, int matchIndex)
+    {
+        if (line.Length <= SnippetWidth)
+        {
+            return line;
+        }
+
+        var window = SnippetWidth - 2;
+        var start = Math.Clamp(matchIndex - (window / 3), 0, line.Length - window);
+        return (start > 0 ? "…" : "")
+            + line.Substring(start, window)
+            + (start + window < line.Length ? "…" : "");
+    }
 }
