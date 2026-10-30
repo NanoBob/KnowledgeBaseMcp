@@ -277,11 +277,13 @@ public sealed class AdminRouteSmokeTests
         var key = await client.PostAsJsonAsync("/admin/api-keys", new
         {
             name = "ci",
-            scopes = new[] { new { directoryId = directory, access = "read" } }
+            scopes = new[] { new { directoryId = directory, access = "read" } },
+            allowGitRead = true
         });
         Assert.Equal(HttpStatusCode.Created, key.StatusCode);
         var createdKey = (await key.Content.ReadFromJsonAsync<KeyRow>())!;
         Assert.False(string.IsNullOrWhiteSpace(createdKey.Key));
+        Assert.True(createdKey.AllowGitRead);
 
         var keys = await client.GetFromJsonAsync<List<KeyRow>>("/admin/api-keys");
         Assert.NotNull(keys);
@@ -295,6 +297,16 @@ public sealed class AdminRouteSmokeTests
         var rescoped = (await scoped.Content.ReadFromJsonAsync<KeyRow>())!;
         Assert.Single(rescoped.Scopes);
         Assert.Null(rescoped.Key);
+        Assert.True(rescoped.AllowGitRead);
+
+        var gitAccess = await client.PutAsJsonAsync(
+            $"/admin/api-keys/{createdKey.Id}/git-access",
+            new { allowGitRead = false });
+        Assert.Equal(HttpStatusCode.OK, gitAccess.StatusCode);
+        Assert.False((await gitAccess.Content.ReadFromJsonAsync<KeyRow>())!.AllowGitRead);
+
+        var missingFlag = await client.PutAsJsonAsync($"/admin/api-keys/{createdKey.Id}/git-access", new { });
+        Assert.Equal(HttpStatusCode.BadRequest, missingFlag.StatusCode);
 
         var regenerated = await client.PostAsync($"/admin/api-keys/{createdKey.Id}/regenerate", null);
         Assert.Equal(HttpStatusCode.OK, regenerated.StatusCode);
@@ -320,5 +332,11 @@ public sealed class AdminRouteSmokeTests
 
     private sealed record RevisionRow(Guid Id, Guid DocumentId, int Version, string Name, DateTime ChangedAt, string ChangedBy);
 
-    private sealed record KeyRow(Guid Id, string Name, string? Key, List<JsonElement> Scopes, DateTime CreatedAt);
+    private sealed record KeyRow(
+        Guid Id,
+        string Name,
+        string? Key,
+        List<JsonElement> Scopes,
+        bool AllowGitRead,
+        DateTime CreatedAt);
 }

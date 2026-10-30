@@ -7,7 +7,8 @@ namespace AgentKnowledgeBase.Mcp.Git;
 /// <summary>
 /// Authenticates git traffic with the same API keys the MCP endpoint uses. Git clients cannot send a bearer
 /// token on their own, so the key is also accepted as the password of HTTP basic auth, which git asks for
-/// interactively or supplies from a credential helper.
+/// interactively or supplies from a credential helper. Only keys granted <see cref="ApiCaller.AllowGitRead"/>
+/// may clone, so a key issued for MCP calls cannot be reused to mirror the knowledge base.
 /// </summary>
 public sealed class KnowledgeGitAuthMiddleware(RequestDelegate next)
 {
@@ -26,6 +27,16 @@ public sealed class KnowledgeGitAuthMiddleware(RequestDelegate next)
             context.Response.Headers.WWWAuthenticate = $"Basic realm=\"{Realm}\", charset=\"UTF-8\"";
             await context.Response.WriteAsJsonAsync(
                 new { error = "invalid_api_key" }, context.RequestAborted);
+            return;
+        }
+
+        if (!caller.AllowGitRead)
+        {
+            // A valid key that was never granted git access. No challenge: asking again cannot help,
+            // and a 401 would make git retry the same credential.
+            context.Response.StatusCode = StatusCodes.Status403Forbidden;
+            await context.Response.WriteAsJsonAsync(
+                new { error = "git_access_denied" }, context.RequestAborted);
             return;
         }
 

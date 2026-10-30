@@ -55,13 +55,19 @@ public partial class KnowledgeGitEndpointTests
         app.Documents.Documents[document.Id] = document;
     }
 
-    private static async Task<string> CreateKeyAsync(KnowledgeBaseApp app, params Guid[] directoryIds)
+    private static Task<string> CreateKeyAsync(KnowledgeBaseApp app, params Guid[] directoryIds) =>
+        CreateKeyAsync(app, allowGitRead: true, directoryIds);
+
+    private static async Task<string> CreateKeyAsync(
+        KnowledgeBaseApp app,
+        bool allowGitRead,
+        params Guid[] directoryIds)
     {
         var keys = app.Services.GetRequiredService<ApiKeyService>();
         var (_, plainText) = await keys.CreateAsync(
             "git",
             [.. directoryIds.Select(id => new KeyScopeInput(id, "read"))],
-            default);
+            allowGitRead, default);
 
         return plainText;
     }
@@ -101,6 +107,41 @@ public partial class KnowledgeGitEndpointTests
         var response = await client.SendAsync(Advertisement("akb_not-a-real-key"));
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task A_key_without_git_access_is_refused()
+    {
+        using var app = new KnowledgeBaseApp();
+        var directory = AddDirectory(app, "alpha");
+        AddDocument(app, directory, "one");
+        var key = await CreateKeyAsync(app, allowGitRead: false, directory);
+
+        using var client = app.CreateClient();
+        var response = await client.SendAsync(Advertisement(key));
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+
+        // No challenge: asking for another credential cannot help, and git would retry the same one.
+        Assert.Empty(response.Headers.WwwAuthenticate);
+        Assert.Contains("git_access_denied", await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Granting_git_access_opens_the_endpoint_to_an_existing_key()
+    {
+        using var app = new KnowledgeBaseApp();
+        var directory = AddDirectory(app, "alpha");
+        AddDocument(app, directory, "one");
+        var key = await CreateKeyAsync(app, allowGitRead: false, directory);
+
+        using var client = app.CreateClient();
+        Assert.Equal(HttpStatusCode.Forbidden, (await client.SendAsync(Advertisement(key))).StatusCode);
+
+        var keys = app.Services.GetRequiredService<ApiKeyService>();
+        await keys.UpdateGitAccessAsync(app.Keys.Keys.Single().Id, true, default);
+
+        Assert.Equal(HttpStatusCode.OK, (await client.SendAsync(Advertisement(key))).StatusCode);
     }
 
     [Fact]

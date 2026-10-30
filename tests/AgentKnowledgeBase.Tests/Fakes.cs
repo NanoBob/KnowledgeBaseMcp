@@ -272,4 +272,16 @@ public sealed class FakeApiKeyRepository : IApiKeyRepository
         key.Scopes = scopes;
         return Task.FromResult<ApiKeyRecord?>(key);
     }
+
+    public Task<ApiKeyRecord?> TryUpdateGitAccessAsync(Guid id, bool allowGitRead, CancellationToken ct)
+    {
+        var key = Keys.FirstOrDefault(k => k.Id == id && k.RevokedAt is null);
+        if (key is null)
+        {
+            return Task.FromResult<ApiKeyRecord?>(null);
+        }
+
+        key.AllowGitRead = allowGitRead;
+        return Task.FromResult<ApiKeyRecord?>(key);
+    }
 }

@@ -84,6 +84,10 @@ To change a key's scopes, call `PUT /admin/api-keys/{id}/scopes` with the full r
 name stay the same, so agents pick up the new permissions on their next call. To rotate a leaked secret while keeping
 its name and scopes, call `POST /admin/api-keys/{id}/regenerate`; the previous secret stops authenticating immediately.
 
+Cloning the git repository needs a separate permission: send `"allowGitRead": true` when creating the key, or call
+`PUT /admin/api-keys/{id}/git-access` with `{ "allowGitRead": true }` to grant it to an existing key. Keys without it
+are refused on the git endpoint with `403` while continuing to work against `/mcp`.
+
 ## Admin REST API
 
 Every call needs the admin token in an `X-Admin-Token` header (or `Authorization: Bearer`). The token is not scoped: it reaches every directory.
@@ -107,6 +111,7 @@ Every call needs the admin token in an `X-Admin-Token` header (or `Authorization
 | `POST` | `/admin/api-keys` | Create a key; the plaintext key is returned once. |
 | `POST` | `/admin/api-keys/{id}/regenerate` | Issue a new secret for the same key and scopes; the old secret stops working. Returns the new plaintext once. |
 | `PUT` | `/admin/api-keys/{id}/scopes` | Replace a key's directory scopes in place, keeping its secret. |
+| `PUT` | `/admin/api-keys/{id}/git-access` | Grant or withdraw git clone access from `{ allowGitRead }`, keeping the key's secret and scopes. |
 | `DELETE` | `/admin/api-keys/{id}` | Revoke a key. This takes effect on the next request. |
 | `POST` | `/admin/transfer/export` | Download a `.zip` with the documents of `{ directoryIds }`. |
 | `POST` | `/admin/transfer/import` | Upload a `.zip` as `multipart/form-data` in the `file` field; `?conflict=overwrite\|skip\|fail` (default `overwrite`). |
@@ -219,6 +224,8 @@ git submodule add http://localhost:8080/git/knowledge.git knowledge
 ```
 
 Every request builds the commit from the documents the key can read: `README.md` lists the directories, `manifest.json` uses the same format as the export, and each document is a `.md` file under a folder named after its directory. The key is accepted as a bearer token or as the password of HTTP basic auth (`git:<api-key>`); a request without a valid key is answered with `401` and a `Basic` challenge, which is what makes git prompt for credentials.
+
+Only keys created with `allowGitRead` (or granted it later through `PUT /admin/api-keys/{id}/git-access`) may clone. Any other key gets `403` without a challenge, so a key handed to an agent for MCP calls cannot be reused to mirror the knowledge base.
 
 The repository is read-only for every client. Only `git-upload-pack` is served, and `git-receive-pack` answers `403`, so documents change through the admin API and the MCP tools, never through a push.
 
