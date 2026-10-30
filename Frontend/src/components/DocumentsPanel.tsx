@@ -137,6 +137,7 @@ export function DocumentsPanel({ directories, documents, notifier, onChanged }: 
   const [revisions, setRevisions] = useState<RevisionSummary[] | null>(null)
   const [revisionView, setRevisionView] = useState<RevisionDetail | null>(null)
   const [busy, setBusy] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
   const [loadedId, setLoadedId] = useState<string | null>(null)
   const [failedId, setFailedId] = useState<string | null>(null)
   const [attempt, setAttempt] = useState(0)
@@ -268,6 +269,17 @@ export function DocumentsPanel({ directories, documents, notifier, onChanged }: 
     if (selectedDirectoryId === null) return
     setCollapsed((current) => current.filter((id) => id !== selectedDirectoryId))
   }, [selectedDirectoryId])
+
+  async function refresh() {
+    setRefreshing(true)
+    try {
+      await onChanged()
+    } catch (cause) {
+      notifier.error(cause)
+    } finally {
+      setRefreshing(false)
+    }
+  }
 
   function startCreate() {
     setSelection({ kind: 'new' })
@@ -428,6 +440,14 @@ export function DocumentsPanel({ directories, documents, notifier, onChanged }: 
               placeholder="Search documents"
               aria-label="Search documents"
             />
+            <button
+              type="button"
+              onClick={() => void refresh()}
+              disabled={refreshing}
+              title="Reload directories and documents"
+            >
+              {refreshing ? 'Refreshing…' : 'Refresh'}
+            </button>
             <button
               type="button"
               className={compact ? 'list-mode active' : 'list-mode'}
