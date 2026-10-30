@@ -38,7 +38,11 @@ public partial class KnowledgeGitEndpointTests
         return directory.Id;
     }
 
-    private static void AddDocument(KnowledgeBaseApp app, Guid directoryId, string name, string content = "body")
+    private static Guid AddDocument(
+        KnowledgeBaseApp app,
+        Guid directoryId,
+        string name,
+        string content = "body")
     {
         var document = new KnowledgeDocument
         {
@@ -55,6 +59,15 @@ public partial class KnowledgeGitEndpointTests
         };
 
         app.Documents.Documents[document.Id] = document;
+        return document.Id;
+    }
+
+    private static void MoveDocument(KnowledgeBaseApp app, Guid documentId, Guid directoryId, string name)
+    {
+        var document = app.Documents.Documents[documentId];
+        document.DirectoryId = directoryId;
+        document.Name = name;
+        document.UpdatedAt = document.UpdatedAt.AddMinutes(1);
     }
 
     private static Task<string> CreateKeyAsync(KnowledgeBaseApp app, params Guid[] directoryIds) =>
@@ -415,6 +428,112 @@ public partial class KnowledgeGitEndpointTests
 
             var log = await GitCli.RunAsync(checkout, "log", "--format=%s");
             Assert.Contains("2 documents", log.Output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteWorkspace(workspace);
+        }
+    }
+
+    /// <summary>
+    /// A deletion is a file that disappears from the tree, so the pull has to remove it from the working tree
+    /// rather than leave the clone holding a document the knowledge base no longer has.
+    /// </summary>
+    [Fact]
+    public async Task A_clone_can_pull_a_deleted_document()
+    {
+        if (!GitCli.IsAvailable)
+        {
+            return;
+        }
+
+        using var app = new KnowledgeBaseApp();
+        var directory = AddDirectory(app, "alpha");
+        AddDocument(app, directory, "one", "first");
+        var removed = AddDocument(app, directory, "two", "second");
+        var key = await CreateKeyAsync(app, directory);
+
+        await using var host = await GitTestHost.StartAsync(app);
+        var workspace = Directory.CreateTempSubdirectory("kb-git-delete-");
+        var checkout = Path.Combine(workspace.FullName, "checkout");
+
+        try
+        {
+            var clone = await GitCli.RunAsync(
+                workspace.FullName,
+                "clone",
+                host.AuthenticatedUrl(key),
+                checkout);
+
+            Assert.True(clone.ExitCode == 0, clone.Error);
+            Assert.True(File.Exists(Path.Combine(checkout, "alpha", "two.md")));
+
+            app.Documents.Documents.Remove(removed);
+
+            var pull = await GitCli.RunAsync(checkout, "pull");
+
+            Assert.True(pull.ExitCode == 0, pull.Error + pull.Output);
+            Assert.False(File.Exists(Path.Combine(checkout, "alpha", "two.md")), "the deleted document should be gone");
+            Assert.True(File.Exists(Path.Combine(checkout, "alpha", "one.md")));
+
+            var subject = await GitCli.RunAsync(checkout, "log", "-1", "--format=%s");
+            Assert.Equal(
+                "Knowledge base snapshot: 1 document in 1 directory",
+                subject.Output.Trim());
+        }
+        finally
+        {
+            DeleteWorkspace(workspace);
+        }
+    }
+
+    /// <summary>
+    /// A move shows up as the old path disappearing and the new one appearing, which is the same tree change git
+    /// reports as a rename, so a rename needs no support of its own.
+    /// </summary>
+    [Fact]
+    public async Task A_clone_can_pull_a_document_moved_to_another_directory()
+    {
+        if (!GitCli.IsAvailable)
+        {
+            return;
+        }
+
+        using var app = new KnowledgeBaseApp();
+        var alpha = AddDirectory(app, "alpha");
+        var beta = AddDirectory(app, "beta");
+        var moved = AddDocument(app, alpha, "one", "first");
+        var key = await CreateKeyAsync(app, alpha, beta);
+
+        await using var host = await GitTestHost.StartAsync(app);
+        var workspace = Directory.CreateTempSubdirectory("kb-git-move-");
+        var checkout = Path.Combine(workspace.FullName, "checkout");
+
+        try
+        {
+            var clone = await GitCli.RunAsync(
+                workspace.FullName,
+                "clone",
+                host.AuthenticatedUrl(key),
+                checkout);
+
+            Assert.True(clone.ExitCode == 0, clone.Error);
+            Assert.True(File.Exists(Path.Combine(checkout, "alpha", "one.md")));
+
+            MoveDocument(app, moved, beta, "one");
+
+            var pull = await GitCli.RunAsync(checkout, "pull");
+
+            Assert.True(pull.ExitCode == 0, pull.Error + pull.Output);
+            Assert.False(File.Exists(Path.Combine(checkout, "alpha", "one.md")), "the old path should be gone");
+
+            var destination = Path.Combine(checkout, "beta", "one.md");
+            Assert.True(File.Exists(destination), $"expected {destination} to exist");
+            Assert.Equal("first", File.ReadAllText(destination).Trim());
+
+            var status = await GitCli.RunAsync(checkout, "status", "--porcelain");
+
+            Assert.Equal("", status.Output.Trim());
         }
         finally
         {
