@@ -234,6 +234,16 @@ The repository is read-only for every client. Only `git-upload-pack` is served, 
 
 The server remembers the commits it handed out, so a clone keeps a real history: `git pull` fast-forwards to the current documents instead of reporting unrelated histories. A new commit is only created when the rendered tree actually changes, and its timestamp is pushed past its parent so history stays ordered. History is tracked per key scope, which means keys that can read the same directories share a history and keys with different scopes never see each other's commits. `Git__HistoryDepth` (default `20`, `1`–`1000`) is how many commits per scope stay available; older ones are pruned together with the content only they used, and a clone that fell further behind than that has to be re-cloned.
 
+That history is the only data the git view adds, and it is written on the first clone rather than when documents change. Leaving `Git__Enabled=false`, or never cloning, keeps all three collections empty:
+
+| Collection | Holds | Grows with |
+| --- | --- | --- |
+| `git_blobs` | File content, keyed by its hash | One copy per *distinct* version of a file, shared by every commit and scope |
+| `git_commits` | The commit object plus its `path → blob` map | `Git__HistoryDepth` commits per scope, one entry per file |
+| `git_heads` | `{ _id: scope, sha }` | One small document per key scope |
+
+Content is shared, so a 100-document snapshot that changes one file stores one new blob, not a second copy of the tree; the commits themselves carry only paths and hashes. A scope therefore costs roughly `HistoryDepth` commit objects plus the versions of the files that changed inside that window.
+
 ## Name and content rules
 
 - Directory names are lowercase `a-z`, `0-9`, `.`, `_`, `-`, up to 64 characters, and unique. Directories never nest.
