@@ -55,6 +55,11 @@ The tag defaults to `latest`. Set `AGENT_KNOWLEDGE_BASE_REGISTRY_IMAGE` to the t
 | `Mongo__ConnectionString` | `mongodb://mongo:27017` | MongoDB connection string. |
 | `Mongo__Database` | `agent_knowledge` | Database name. |
 | `Frontend__Origins__0`, `…__1`, … | `http://localhost:5173`, `http://localhost:4173` | Browser origins allowed to call the admin API. |
+| `Git__Enabled` | `false` | Serves the knowledge base as a read-only git repository. |
+| `Git__Path` | `/git/knowledge.git` | Path the repository is mounted at, which is also the clone URL. |
+| `Git__Branch` | `main` | Branch a clone checks out. |
+| `Git__AuthorName`, `Git__AuthorEmail` | `Knowledge Base`, `knowledge-base@localhost` | Author and committer of the generated commit. |
+| `Git__HistoryDepth` | `20` | How many commits per key scope stay available for `git pull`. |
 
 ## Managing directories and API keys
 
@@ -80,6 +85,10 @@ To change a key's scopes, call `PUT /admin/api-keys/{id}/scopes` with the full r
 name stay the same, so agents pick up the new permissions on their next call. To rotate a leaked secret while keeping
 its name and scopes, call `POST /admin/api-keys/{id}/regenerate`; the previous secret stops authenticating immediately.
 
+Cloning the git repository needs a separate permission: send `"allowGitRead": true` when creating the key, or call
+`PUT /admin/api-keys/{id}/git-access` with `{ "allowGitRead": true }` to grant it to an existing key. Keys without it
+are refused on the git endpoint with `403` while continuing to work against `/mcp`.
+
 ## Admin REST API
 
 Every call needs the admin token in an `X-Admin-Token` header (or `Authorization: Bearer`). The token is not scoped: it reaches every directory.
@@ -103,6 +112,7 @@ Every call needs the admin token in an `X-Admin-Token` header (or `Authorization
 | `POST` | `/admin/api-keys` | Create a key; the plaintext key is returned once. |
 | `POST` | `/admin/api-keys/{id}/regenerate` | Issue a new secret for the same key and scopes; the old secret stops working. Returns the new plaintext once. |
 | `PUT` | `/admin/api-keys/{id}/scopes` | Replace a key's directory scopes in place, keeping its secret. |
+| `PUT` | `/admin/api-keys/{id}/git-access` | Grant or withdraw git clone access from `{ allowGitRead }`, keeping the key's secret and scopes. |
 | `DELETE` | `/admin/api-keys/{id}` | Revoke a key. This takes effect on the next request. |
 | `POST` | `/admin/transfer/export` | Download a `.zip` with the documents of `{ directoryIds }`. |
 | `POST` | `/admin/transfer/import` | Upload a `.zip` as `multipart/form-data` in the `file` field; `?conflict=overwrite\|skip\|fail` (default `overwrite`). |
@@ -204,6 +214,38 @@ Example client configuration (Streamable HTTP):
   }
 }
 ```
+
+## Read-only git repository
+
+Setting `Git__Enabled=true` serves the knowledge base as a git repository at `http://localhost:8080/git/knowledge.git`, so a workspace can pin a snapshot as a submodule instead of calling the MCP tools on every read:
+
+```bash
+git clone http://git:<api-key>@localhost:8080/git/knowledge.git knowledge
+git submodule add http://localhost:8080/git/knowledge.git knowledge
+```
+
+Every request builds the commit from the documents the key can read: `README.md` lists the directories, `manifest.json` uses the same format as the export, and each document is a `.md` file under a folder named after its directory. The key is accepted as a bearer token or as the password of HTTP basic auth (`git:<api-key>`); a request without a valid key is answered with `401` and a `Basic` challenge, which is what makes git prompt for credentials.
+
+Only keys created with `allowGitRead` (or granted it later through `PUT /admin/api-keys/{id}/git-access`) may clone. Any other key gets `403` without a challenge, so a key handed to an agent for MCP calls cannot be reused to mirror the knowledge base.
+
+A clone always contains the entire repository, but that repository only holds what the presenting key may read: a key scoped to two directories clones those two directories and nothing else, and documents outside them are never fetched. There is no shared repository with hidden parts, so two keys with different scopes see different commits at the same URL, and a submodule pinned by one key cannot be fetched with another. Granting a key more scopes changes its commit on the next fetch.
+
+The repository is read-only for every client. Only `git-upload-pack` is served, and `git-receive-pack` answers `403`, so documents change through the admin API and the MCP tools, never through a push.
+
+The server remembers the commits it handed out, so a clone keeps a real history: `git pull` fast-forwards to the current documents instead of reporting unrelated histories. A new commit is only created when the rendered tree actually changes, and its timestamp is pushed past its parent so history stays ordered. History is tracked per key scope, which means keys that can read the same directories share a history and keys with different scopes never see each other's commits. `Git__HistoryDepth` (default `20`, `1`–`1000`) is how many commits per scope stay available; older ones are pruned together with the content only they used, the oldest survivor is rewritten to carry the whole tree so what is left stays rebuildable, and a clone that fell further behind than that has to be re-cloned.
+
+What is stored is deliberately small: the ids of the commit and its parent, the timestamp, the two counts in the message, and the files the commit changed. The commit object, the tree and every earlier version of a document are rebuilt from those facts, so the stored history is a chain of ids rather than a copy of the objects.
+
+Document revisions alone cannot serve this. A revision list has no total order across documents, a deleted document takes its revisions with it, a directory rename leaves no trace, and `README.md` and `manifest.json` are generated rather than revised. A commit id is also a promise: a clone pins one, and it has to keep resolving to the same object even after the code that generates it changes.
+
+The history is the only data the git view adds, and it is written on the first clone rather than when documents change. Leaving `Git__Enabled=false`, or never cloning, keeps both collections empty:
+
+| Collection | Holds | Grows with |
+| --- | --- | --- |
+| `git_blobs` | File content, keyed by its hash | One copy per *distinct* version of a file, shared by every commit and scope |
+| `git_commits` | The commit and parent ids, the timestamp, and the `path → blob` changes | `Git__HistoryDepth` commits per scope, one entry per file that changed |
+
+Content is shared, so a 100-document snapshot that changes one file stores one new blob and one change entry, not a second copy of the tree. A scope therefore costs roughly `HistoryDepth` small commit documents plus the versions of the files that changed inside that window.
 
 ## Name and content rules
 

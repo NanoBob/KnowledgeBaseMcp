@@ -99,6 +99,12 @@ public interface IApiKeyRepository
     /// Returns null when no active key with that id exists.
     /// </summary>
     Task<ApiKeyRecord?> TryUpdateScopesAsync(Guid id, List<KeyScope> scopes, CancellationToken ct);
+
+    /// <summary>
+    /// Grants or withdraws git clone access in place, keeping the key's scopes and secret.
+    /// Returns null when no active key with that id exists.
+    /// </summary>
+    Task<ApiKeyRecord?> TryUpdateGitAccessAsync(Guid id, bool allowGitRead, CancellationToken ct);
 }
 
 public sealed class MongoDirectoryRepository(IMongoDatabase database) : IDirectoryRepository
@@ -327,6 +333,14 @@ public sealed class MongoApiKeyRepository(IMongoDatabase database) : IApiKeyRepo
     {
         var filter = Builders<ApiKeyRecord>.Filter.Where(k => k.Id == id && k.RevokedAt == null);
         var update = Builders<ApiKeyRecord>.Update.Set(k => k.Scopes, scopes);
+        var options = new FindOneAndUpdateOptions<ApiKeyRecord> { ReturnDocument = ReturnDocument.After };
+        return await _keys.FindOneAndUpdateAsync(filter, update, options, ct);
+    }
+
+    public async Task<ApiKeyRecord?> TryUpdateGitAccessAsync(Guid id, bool allowGitRead, CancellationToken ct)
+    {
+        var filter = Builders<ApiKeyRecord>.Filter.Where(k => k.Id == id && k.RevokedAt == null);
+        var update = Builders<ApiKeyRecord>.Update.Set(k => k.AllowGitRead, allowGitRead);
         var options = new FindOneAndUpdateOptions<ApiKeyRecord> { ReturnDocument = ReturnDocument.After };
         return await _keys.FindOneAndUpdateAsync(filter, update, options, ct);
     }

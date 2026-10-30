@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text;
 using AgentKnowledgeBase.Mcp.Domain;
+using AgentKnowledgeBase.Mcp.Git;
 using AgentKnowledgeBase.Mcp.Services;
 using AgentKnowledgeBase.Mcp.Storage;
 using Microsoft.AspNetCore.Hosting;
@@ -25,12 +26,16 @@ public sealed class KnowledgeBaseApp : WebApplicationFactory<Program>
     public FakeDirectoryRepository Directories { get; } = new();
     public FakeDocumentRepository Documents { get; } = new();
     public FakeApiKeyRepository Keys { get; } = new();
+    public FakeGitHistoryStore GitHistory { get; } = new();
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseSetting("Mongo:ConnectionString", "mongodb://localhost:27017");
         builder.UseSetting("Mongo:Database", "integration_test");
         builder.UseSetting("Admin:Token", AdminToken);
+
+        // On by default so the git endpoint is part of the pipeline under test; it is off in a real deployment.
+        builder.UseSetting("Git:Enabled", "true");
 
         builder.ConfigureServices(services =>
         {
@@ -39,6 +44,7 @@ public sealed class KnowledgeBaseApp : WebApplicationFactory<Program>
             services.RemoveAll<IDirectoryRepository>();
             services.RemoveAll<IDocumentRepository>();
             services.RemoveAll<IApiKeyRepository>();
+            services.RemoveAll<IGitHistoryStore>();
 
             // The index initializer would dial MongoDB on startup.
             foreach (var hosted in services
@@ -52,6 +58,7 @@ public sealed class KnowledgeBaseApp : WebApplicationFactory<Program>
             services.AddSingleton<IDirectoryRepository>(Directories);
             services.AddSingleton<IDocumentRepository>(Documents);
             services.AddSingleton<IApiKeyRepository>(Keys);
+            services.AddSingleton<IGitHistoryStore>(GitHistory);
         });
     }
 

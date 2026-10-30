@@ -54,6 +54,7 @@ public sealed class AdminOpenApiTests
             "/admin/api-keys/{id}",
             "/admin/api-keys/{id}/regenerate",
             "/admin/api-keys/{id}/scopes",
+            "/admin/api-keys/{id}/git-access",
             "/admin/transfer/export",
             "/admin/transfer/import"
         ];

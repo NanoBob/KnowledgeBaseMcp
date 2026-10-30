@@ -10,6 +10,8 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="GenHTTP.Adapters.AspNetCore" Version="11.1.0" />
+    <PackageReference Include="GenHTTP.Modules.Git" Version="0.1.1" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.14" />
     <PackageReference Include="ModelContextProtocol.AspNetCore" Version="2.3.0" />
     <PackageReference Include="MongoDB.Driver" Version="3.13.0" />
