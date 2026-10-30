@@ -19,7 +19,7 @@ Three entities, all identified by GUID:
 | `get_knowledge_document` | Get one document by `id`, including markdown `content`. |
 | `store_knowledge_document` | Create or update a document. Updates require `expectedVersion`. |
 
-Creating a document requires `directoryId`, `name`, and `content`; the `id` is generated, so any agent with write access can add documents to its directories. Updating requires the `id` and the `version` you last read. A stale version returns an error with the current version, so the agent can re-read and retry. An update replaces `summary`, `tags`, and `content`, so omitting `summary` clears it; omitting `name` keeps the current one. The agent tools never move a document between directories — that is an admin action (`POST /admin/documents/{id}/move` or the admin UI).
+Creating a document requires `directoryId`, `name`, and `content`; the `id` is generated, so any agent with write access can add documents to its directories. Updating requires the `id` and the `version` you last read. A stale version returns a `409` telling the agent the document changed since it read it, so it refetches the document and re-applies its changes rather than overwriting the other agent's edit. An update replaces `summary`, `tags`, and `content`, so omitting `summary` clears it; omitting `name` keeps the current one. The agent tools never move a document between directories — that is an admin action (`POST /admin/documents/{id}/move` or the admin UI).
 
 ## Run with Docker Compose
 
@@ -152,7 +152,7 @@ curl -X POST "http://localhost:8080/admin/transfer/import?conflict=skip" \
 Errors come back as JSON with an HTTP status that matches the failure:
 
 ```json
-{ "error": "document '…' is at version 3. Retry with expectedVersion=3 to update it.", "kind": "conflict", "latestVersion": 3 }
+{ "error": "document '…' has been updated since you read it: expected version 2, current version 3. Fetch it again with get_knowledge_document, re-apply your changes, and retry with expectedVersion=3.", "kind": "conflict", "latestVersion": 3 }
 ```
 
 `kind` is one of `validation` (400), `notfound` (404), `forbidden` (403) or `conflict` (409).

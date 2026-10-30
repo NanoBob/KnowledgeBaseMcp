@@ -142,6 +142,26 @@ public class KnowledgeServiceTests
 
         Assert.Equal(KnowledgeErrorKind.Conflict, ex.Kind);
         Assert.Equal(2, ex.LatestVersion);
+        Assert.Contains("has been updated since you read it", ex.Message);
+        Assert.Contains("expected version 1, current version 2", ex.Message);
+        Assert.Equal("v2", _repo.Documents[created.Id].Content);
+    }
+
+    [Fact]
+    public async Task Update_OnConflict_TellsTheCallerToRefetchAndReapply()
+    {
+        var directoryId = await CreateDirectoryAsync();
+        var caller = Caller(Rw(directoryId));
+        var created = await _service.StoreAsync(caller, Create(directoryId, "Notes"), default);
+        await _service.StoreAsync(caller, new StoreRequest(created.Id, null, null, null, null, "v2", 1), default);
+
+        var ex = await Assert.ThrowsAsync<KnowledgeException>(() =>
+            _service.StoreAsync(caller, new StoreRequest(created.Id, null, null, null, null, "stale", 1), default));
+
+        // Retrying with only the new version would overwrite the edit this caller never saw.
+        Assert.Contains("get_knowledge_document", ex.Message);
+        Assert.Contains("re-apply your changes", ex.Message);
+        Assert.Contains("expectedVersion=2", ex.Message);
     }
 
     [Fact]
@@ -155,6 +175,34 @@ public class KnowledgeServiceTests
             _service.StoreAsync(caller, new StoreRequest(created.Id, null, null, null, null, "x", null), default));
 
         Assert.Equal(KnowledgeErrorKind.Conflict, ex.Kind);
+        Assert.Equal(1, ex.LatestVersion);
+        Assert.Contains("requires the version you last read", ex.Message);
+        Assert.Contains("get_knowledge_document", ex.Message);
+    }
+
+    [Fact]
+    public async Task Update_WhenAnotherWriterCommitsFirst_ReturnsConflictAndKeepsTheirEdit()
+    {
+        var directoryId = await CreateDirectoryAsync();
+        var caller = Caller(Rw(directoryId));
+        var created = await _service.StoreAsync(caller, Create(directoryId, "Notes"), default);
+
+        // Both callers read version 1; the other one commits between this caller's read and its replace.
+        _repo.BeforeReplace = () =>
+        {
+            _repo.Documents[created.Id].Version = 2;
+            _repo.Documents[created.Id].Content = "other agent";
+        };
+
+        var ex = await Assert.ThrowsAsync<KnowledgeException>(() =>
+            _service.StoreAsync(caller, new StoreRequest(created.Id, null, null, null, null, "mine", 1), default));
+
+        Assert.Equal(KnowledgeErrorKind.Conflict, ex.Kind);
+        Assert.Equal(2, ex.LatestVersion);
+        Assert.Contains("updated by someone else while you were saving", ex.Message);
+        Assert.Contains("re-apply your changes", ex.Message);
+        Assert.Equal("other agent", _repo.Documents[created.Id].Content);
+        Assert.Single(_repo.Revisions);
     }
 
     [Fact]
