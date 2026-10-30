@@ -16,8 +16,12 @@ public sealed class DocumentsController(KnowledgeService knowledge) : Controller
     /// <summary>Lists documents, newest first, optionally narrowed to one directory.</summary>
     [HttpGet]
     [ProducesResponseType(typeof(IReadOnlyList<DocumentSummary>), StatusCodes.Status200OK, AdminMediaTypes.Json)]
-    public async Task<IActionResult> List([FromQuery] Guid? directoryId, CancellationToken ct) =>
-        Ok(await knowledge.ListAsync(ApiCaller.Admin, directoryId, ct));
+    public async Task<IActionResult> List(
+        [FromQuery] Guid? directoryId,
+        [FromQuery] int? limit,
+        [FromQuery] int? offset,
+        CancellationToken ct) =>
+        Ok(await knowledge.ListAsync(ApiCaller.Admin, directoryId, limit, offset, ct));
 
     /// <summary>Gets one document, including its content.</summary>
     /// <response code="404">No document has this id.</response>
