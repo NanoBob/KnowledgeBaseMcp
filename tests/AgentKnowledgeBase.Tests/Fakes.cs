@@ -75,6 +75,9 @@ public sealed class FakeDocumentRepository : IDocumentRepository
     public Dictionary<Guid, KnowledgeDocument> Documents { get; } = new();
     public List<KnowledgeDocumentRevision> Revisions { get; } = [];
 
+    /// <summary>Lets a test land another writer's commit between the service's read and its conditional replace.</summary>
+    public Action? BeforeReplace { get; set; }
+
     public Task<List<KnowledgeDocument>> ListSummariesAsync(
         IReadOnlyCollection<Guid>? directoryIds,
         CancellationToken ct) =>
@@ -138,6 +141,8 @@ public sealed class FakeDocumentRepository : IDocumentRepository
 
     public Task<ReplaceOutcome> TryReplaceAsync(KnowledgeDocument document, int expectedVersion, CancellationToken ct)
     {
+        BeforeReplace?.Invoke();
+
         if (!Documents.TryGetValue(document.Id, out var stored) || stored.Version != expectedVersion)
         {
             return Task.FromResult(ReplaceOutcome.VersionMismatch);

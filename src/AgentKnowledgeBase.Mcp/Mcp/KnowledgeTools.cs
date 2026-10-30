@@ -39,7 +39,8 @@ public sealed class KnowledgeTools
     [McpServerTool(Name = "store_knowledge_document")]
     [Description(
         "Create or update a knowledge document. To create, pass directoryId, name and content; the id is generated. " +
-        "To update, pass the id and the version you last read as expectedVersion; a stale version returns a conflict with the latest version. " +
+        "To update, pass the id and the version you last read as expectedVersion. If the document changed since you read it, " +
+        "the call fails with a conflict; fetch it again with get_knowledge_document, re-apply your changes, and retry. " +
         "A document cannot be moved between directories. Content is Markdown, up to 100 KB.")]
     public static Task<StoreDocumentResponse> StoreKnowledgeDocument(
         KnowledgeService knowledge,

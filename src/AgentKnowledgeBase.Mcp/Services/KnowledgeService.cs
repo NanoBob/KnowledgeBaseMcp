@@ -358,10 +358,19 @@ public sealed class KnowledgeService(IDocumentRepository documents, IDirectoryRe
                 $"document '{id}' lives in directory '{directory.Name}'. It cannot be moved to another directory.");
         }
 
-        if (request.ExpectedVersion is null || request.ExpectedVersion != existing.Version)
+        if (request.ExpectedVersion is null)
         {
             throw KnowledgeException.Conflict(
-                $"document '{id}' is at version {existing.Version}. Retry with expectedVersion={existing.Version} to update it.",
+                $"updating document '{id}' requires the version you last read; it is now at version {existing.Version}. " +
+                RefetchAdvice(existing.Version),
+                existing.Version);
+        }
+
+        if (request.ExpectedVersion != existing.Version)
+        {
+            throw KnowledgeException.Conflict(
+                $"document '{id}' has been updated since you read it: expected version {request.ExpectedVersion}, " +
+                $"current version {existing.Version}. {RefetchAdvice(existing.Version)}",
                 existing.Version);
         }
 
@@ -389,14 +398,28 @@ public sealed class KnowledgeService(IDocumentRepository documents, IDirectoryRe
                     $"a document named '{name}' already exists in directory '{directory.Name}'.");
             case ReplaceOutcome.VersionMismatch:
                 var latest = await documents.FindAsync(id, ct);
+                if (latest is null)
+                {
+                    throw KnowledgeException.Conflict(
+                        $"document '{id}' was deleted while you were saving. Nothing was written.");
+                }
+
                 throw KnowledgeException.Conflict(
-                    $"document '{id}' changed while updating. Retry with expectedVersion={latest?.Version}.",
-                    latest?.Version);
+                    $"document '{id}' has been updated by someone else while you were saving; it is now at version {latest.Version}. " +
+                    RefetchAdvice(latest.Version),
+                    latest.Version);
         }
 
         await RecordRevisionAsync(updated, ct);
         return new StoreResult(updated.Id, updated.DirectoryId, updated.Name, updated.Version, Created: false);
     }
+
+    /// <summary>
+    /// A retry that only swaps in the new version would write the caller's stale copy over the change it
+    /// just lost to, so the message names the refetch step explicitly.
+    /// </summary>
+    private static string RefetchAdvice(int currentVersion) =>
+        $"Fetch it again with get_knowledge_document, re-apply your changes, and retry with expectedVersion={currentVersion}.";
 
     private async Task RecordRevisionAsync(KnowledgeDocument document, CancellationToken ct) =>
         await documents.AddRevisionAsync(new KnowledgeDocumentRevision
