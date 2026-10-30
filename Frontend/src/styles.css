@@ -104,6 +104,16 @@ textarea:disabled {
   cursor: not-allowed;
 }
 
+/* Checkboxes are not form fields: the shared rule would stretch them into a full-width box. */
+input[type='checkbox'] {
+  width: auto;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: 0;
+  accent-color: var(--accent);
+}
+
 /* Monaco sizes and scrolls itself, so the wrapper only has to claim the space. */
 .content-editor {
   flex: 1;
