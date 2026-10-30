@@ -2,6 +2,7 @@ using AgentKnowledgeBase.Mcp;
 using AgentKnowledgeBase.Mcp.Admin;
 using AgentKnowledgeBase.Mcp.Auth;
 using AgentKnowledgeBase.Mcp.Domain;
+using AgentKnowledgeBase.Mcp.Git;
 using AgentKnowledgeBase.Mcp.Mcp;
 using AgentKnowledgeBase.Mcp.Services;
 using AgentKnowledgeBase.Mcp.Storage;
@@ -27,6 +28,13 @@ builder.Services.AddOptions<TransferOptions>()
     .ValidateDataAnnotations()
     .ValidateOnStart();
 
+builder.Services.AddOptions<GitOptions>()
+    .Bind(builder.Configuration.GetSection("Git"))
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
+
+builder.Services.AddHttpContextAccessor();
+
 builder.Services.AddSingleton<IMongoClient>(sp =>
     new MongoClient(sp.GetRequiredService<IOptions<MongoOptions>>().Value.ConnectionString));
 builder.Services.AddSingleton<IMongoDatabase>(sp =>
@@ -38,6 +46,7 @@ builder.Services.AddSingleton<IApiKeyRepository, MongoApiKeyRepository>();
 builder.Services.AddSingleton<DirectoryService>();
 builder.Services.AddSingleton<KnowledgeService>();
 builder.Services.AddSingleton<DocumentTransferService>();
+builder.Services.AddSingleton<KnowledgeSnapshotLoader>();
 builder.Services.AddSingleton<ApiKeyService>();
 builder.Services.AddHostedService<MongoIndexInitializer>();
 
@@ -119,6 +128,7 @@ app.UseWhen(
 
 app.MapMcp("/mcp");
 app.MapControllers();
+app.MapKnowledgeGit();
 
 app.Run();
 

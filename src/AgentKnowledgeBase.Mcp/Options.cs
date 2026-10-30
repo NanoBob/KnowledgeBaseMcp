@@ -39,3 +39,27 @@ public sealed class TransferOptions
     [Range(1, 1_000_000)]
     public int MaxExportDocuments { get; set; } = 100_000;
 }
+
+public sealed class GitOptions
+{
+    /// <summary>
+    /// Whether the read-only git endpoint is served. Off by default so an existing deployment does not start
+    /// accepting git traffic without an explicit decision.
+    /// </summary>
+    public bool Enabled { get; set; }
+
+    /// <summary>Path the repository is mounted at, e.g. <c>git clone https://host/git/knowledge.git</c>.</summary>
+    [Required]
+    public string Path { get; set; } = "/git/knowledge.git";
+
+    /// <summary>Branch a clone checks out.</summary>
+    [Required]
+    public string Branch { get; set; } = "main";
+
+    /// <summary>Author and committer recorded on the generated snapshot commit.</summary>
+    [Required]
+    public string AuthorName { get; set; } = "Knowledge Base";
+
+    [Required, EmailAddress]
+    public string AuthorEmail { get; set; } = "knowledge-base@localhost";
+}

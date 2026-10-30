@@ -55,6 +55,10 @@ The tag defaults to `latest`. Set `AGENT_KNOWLEDGE_BASE_REGISTRY_IMAGE` to the t
 | `Mongo__ConnectionString` | `mongodb://mongo:27017` | MongoDB connection string. |
 | `Mongo__Database` | `agent_knowledge` | Database name. |
 | `Frontend__Origins__0`, `…__1`, … | `http://localhost:5173`, `http://localhost:4173` | Browser origins allowed to call the admin API. |
+| `Git__Enabled` | `false` | Serves the knowledge base as a read-only git repository. |
+| `Git__Path` | `/git/knowledge.git` | Path the repository is mounted at, which is also the clone URL. |
+| `Git__Branch` | `main` | Branch a clone checks out. |
+| `Git__AuthorName`, `Git__AuthorEmail` | `Knowledge Base`, `knowledge-base@localhost` | Author and committer of the generated commit. |
 
 ## Managing directories and API keys
 
@@ -204,6 +208,21 @@ Example client configuration (Streamable HTTP):
   }
 }
 ```
+
+## Read-only git repository
+
+Setting `Git__Enabled=true` serves the knowledge base as a git repository at `http://localhost:8080/git/knowledge.git`, so a workspace can pin a snapshot as a submodule instead of calling the MCP tools on every read:
+
+```bash
+git clone http://git:<api-key>@localhost:8080/git/knowledge.git knowledge
+git submodule add http://localhost:8080/git/knowledge.git knowledge
+```
+
+Every request builds the commit from the documents the key can read: `README.md` lists the directories, `manifest.json` uses the same format as the export, and each document is a `.md` file under a folder named after its directory. The key is accepted as a bearer token or as the password of HTTP basic auth (`git:<api-key>`); a request without a valid key is answered with `401` and a `Basic` challenge, which is what makes git prompt for credentials.
+
+The repository is read-only for every client. Only `git-upload-pack` is served, and `git-receive-pack` answers `403`, so documents change through the admin API and the MCP tools, never through a push.
+
+Each request renders the current documents into a single commit with no parent, so two clones taken at different times share no history and `git pull` reports unrelated histories. Re-clone, or `git fetch` and reset, to move to a newer snapshot; keeping a real commit history is the follow-up.
 
 ## Name and content rules
 

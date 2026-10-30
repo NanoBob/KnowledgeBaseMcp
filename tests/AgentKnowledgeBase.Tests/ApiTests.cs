@@ -32,6 +32,9 @@ public sealed class KnowledgeBaseApp : WebApplicationFactory<Program>
         builder.UseSetting("Mongo:Database", "integration_test");
         builder.UseSetting("Admin:Token", AdminToken);
 
+        // On by default so the git endpoint is part of the pipeline under test; it is off in a real deployment.
+        builder.UseSetting("Git:Enabled", "true");
+
         builder.ConfigureServices(services =>
         {
             services.RemoveAll<IMongoClient>();
