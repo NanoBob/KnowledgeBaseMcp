@@ -62,4 +62,11 @@ public sealed class GitOptions
 
     [Required, EmailAddress]
     public string AuthorEmail { get; set; } = "knowledge-base@localhost";
+
+    /// <summary>
+    /// How many commits a scope keeps. A clone only needs the commit it has plus the new one to fast-forward,
+    /// so a short history is enough; the limit keeps the stored snapshots from growing without bound.
+    /// </summary>
+    [Range(1, 1000)]
+    public int HistoryDepth { get; set; } = 20;
 }

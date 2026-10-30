@@ -20,6 +20,7 @@ public sealed class MongoIndexInitializer(IMongoDatabase database, ILogger<Mongo
                 await MongoDirectoryRepository.EnsureIndexesAsync(database, cancellationToken);
                 await MongoDocumentRepository.EnsureIndexesAsync(database, cancellationToken);
                 await MongoApiKeyRepository.EnsureIndexesAsync(database, cancellationToken);
+                await MongoGitHistoryStore.EnsureIndexesAsync(database, cancellationToken);
                 logger.LogInformation("MongoDB indexes ensured for database {Database}.", database.DatabaseNamespace.DatabaseName);
                 return;
             }

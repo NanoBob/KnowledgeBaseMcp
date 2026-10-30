@@ -52,9 +52,14 @@ public static class KnowledgeGitEndpoint
                     // free to depend on scoped services later without changing this wiring.
                     await using var scope = scopes.CreateAsyncScope();
                     var loader = scope.ServiceProvider.GetRequiredService<KnowledgeSnapshotLoader>();
+                    var history = scope.ServiceProvider.GetRequiredService<KnowledgeGitHistory>();
 
                     var snapshot = await loader.LoadAsync(caller, context!.RequestAborted);
-                    return new KnowledgeGitRepository(snapshot, settings);
+                    return new KnowledgeGitRepository(
+                        KnowledgeGitHistory.ScopeKey(caller),
+                        snapshot,
+                        history,
+                        settings);
                 })
                 .Agent("AgentKnowledgeBase")
                 .Build());

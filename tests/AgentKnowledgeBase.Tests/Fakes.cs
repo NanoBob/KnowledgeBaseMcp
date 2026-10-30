@@ -1,7 +1,9 @@
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using AgentKnowledgeBase.Mcp.Domain;
+using AgentKnowledgeBase.Mcp.Git;
 using AgentKnowledgeBase.Mcp.Storage;
+using GenHTTP.Modules.Git;
 
 namespace AgentKnowledgeBase.Tests;
 
@@ -284,4 +286,82 @@ public sealed class FakeApiKeyRepository : IApiKeyRepository
         key.AllowGitRead = allowGitRead;
         return Task.FromResult<ApiKeyRecord?>(key);
     }
+}
+
+public sealed class FakeGitHistoryStore : IGitHistoryStore
+{
+    private readonly Dictionary<string, List<GitStoredCommit>> commits = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, GitStoredCommit> heads = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> blobs = new(StringComparer.Ordinal);
+
+    /// <summary>Every blob currently stored, so a test can assert that pruning released the content.</summary>
+    public IReadOnlyDictionary<string, string> Blobs => blobs;
+
+    /// <summary>The retained commits of a scope, newest first.</summary>
+    public IReadOnlyList<GitStoredCommit> Commits(string scope) =>
+        commits.TryGetValue(scope, out var stored)
+            ? [.. stored.OrderByDescending(c => c.When)]
+            : [];
+
+    public Task<GitStoredCommit?> GetHeadAsync(string scope, CancellationToken ct) =>
+        Task.FromResult(heads.TryGetValue(scope, out var head) ? head : null);
+
+    public Task<GitStoredCommit?> FindCommitAsync(string scope, GitObjectId id, CancellationToken ct) =>
+        Task.FromResult(Commits(scope).FirstOrDefault(c => string.Equals(c.Sha, id.ToString(), StringComparison.Ordinal)));
+
+    public Task AppendAsync(
+        string scope,
+        GitStoredCommit commit,
+        IReadOnlyCollection<GitStoredBlob> blobs,
+        int depth,
+        CancellationToken ct)
+    {
+        if (!commits.TryGetValue(scope, out var stored))
+        {
+            stored = [];
+            commits[scope] = stored;
+        }
+
+        if (stored.All(c => !string.Equals(c.Sha, commit.Sha, StringComparison.Ordinal)))
+        {
+            stored.Add(commit);
+        }
+
+        foreach (var blob in blobs)
+        {
+            this.blobs[blob.Id] = blob.Content;
+        }
+
+        heads[scope] = commit;
+
+        var stale = stored.OrderByDescending(c => c.When).Skip(depth).ToList();
+        if (stale.Count == 0)
+        {
+            return Task.CompletedTask;
+        }
+
+        foreach (var old in stale)
+        {
+            stored.Remove(old);
+        }
+
+        var alive = stored.SelectMany(c => c.Files).Select(f => f.BlobId).ToHashSet(StringComparer.Ordinal);
+        foreach (var unused in stale
+                     .SelectMany(c => c.Files)
+                     .Select(f => f.BlobId)
+                     .Distinct(StringComparer.Ordinal)
+                     .Where(id => !alive.Contains(id)))
+        {
+            this.blobs.Remove(unused);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public Task<IReadOnlyDictionary<string, string>> ReadBlobsAsync(
+        IReadOnlyCollection<string> ids,
+        CancellationToken ct) =>
+        Task.FromResult<IReadOnlyDictionary<string, string>>(ids
+            .Where(blobs.ContainsKey)
+            .ToDictionary(id => id, id => blobs[id], StringComparer.Ordinal));
 }

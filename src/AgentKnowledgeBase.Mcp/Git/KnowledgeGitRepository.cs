@@ -3,31 +3,24 @@ using GenHTTP.Modules.Git;
 namespace AgentKnowledgeBase.Mcp.Git;
 
 /// <summary>
-/// Serves one snapshot as a repository with a single, parentless commit. There is no history to traverse, so a
-/// client that already has the snapshot only ever asks for the commit it knows about.
+/// Serves one scope of the knowledge base as a repository. The commit comes from
+/// <see cref="KnowledgeGitHistory"/>, which keeps the history stable across requests so a clone can pull.
 /// </summary>
 /// <remarks>
-/// The commit is created once per instance and the instance lives for one request, which keeps the branch, the
-/// commit and the tree in agreement even when the knowledge base changes between requests.
+/// The instance lives for one request, so it caches only within that request; the stored history is what makes
+/// the branch, the commit and the tree agree even when the knowledge base changes between requests.
 /// </remarks>
-public sealed class KnowledgeGitRepository(KnowledgeSnapshot snapshot, GitOptions options) : IGitRepository
+public sealed class KnowledgeGitRepository(
+    string scope,
+    KnowledgeSnapshot snapshot,
+    KnowledgeGitHistory history,
+    GitOptions options) : IGitRepository
 {
     private readonly SemaphoreSlim gate = new(1, 1);
-    private (GitCommit Commit, GitTree Tree)? content;
+    private GitResolvedCommit? resolved;
 
-    /// <summary>The commit every reference points to. Deterministic, so an unchanged knowledge base keeps its id.</summary>
-    public async ValueTask<GitCommit> GetCommitAsync()
-    {
-        await gate.WaitAsync().ConfigureAwait(false);
-        try
-        {
-            return (await MaterializeAsync().ConfigureAwait(false)).Commit;
-        }
-        finally
-        {
-            gate.Release();
-        }
-    }
+    /// <summary>The commit every reference points to. Reused while the knowledge base still produces its tree.</summary>
+    public async ValueTask<GitCommit> GetCommitAsync() => (await ResolveAsync().ConfigureAwait(false)).Commit;
 
     public async ValueTask<GitReferences> GetReferencesAsync()
     {
@@ -40,48 +33,51 @@ public sealed class KnowledgeGitRepository(KnowledgeSnapshot snapshot, GitOption
 
     public async ValueTask<GitCommit?> GetCommitAsync(GitObjectId id)
     {
-        var commit = await GetCommitAsync().ConfigureAwait(false);
+        var current = await ResolveAsync().ConfigureAwait(false);
+        if (current.Commit.Id == id)
+        {
+            return current.Commit;
+        }
 
-        return commit.Id == id ? commit : null;
+        // An older commit is still served while it is retained, which is what lets a client that pinned one
+        // fetch it again instead of re-cloning.
+        var stored = await history.FindAsync(scope, id, CancellationToken.None).ConfigureAwait(false);
+
+        return stored is null ? null : GitCommit.Parse(stored.Data);
     }
 
     public async ValueTask<GitTree> GetTreeAsync(GitCommit commit)
     {
+        ArgumentNullException.ThrowIfNull(commit);
+
+        var current = await ResolveAsync().ConfigureAwait(false);
+        if (current.Commit.Id == commit.Id)
+        {
+            return current.Tree;
+        }
+
+        var stored = await history.FindAsync(scope, commit.Id, CancellationToken.None).ConfigureAwait(false)
+                     ?? throw new InvalidOperationException($"Commit {commit.Id} is not part of this repository.");
+
+        return await history.GetTreeAsync(scope, stored, CancellationToken.None).ConfigureAwait(false);
+    }
+
+    private async ValueTask<GitResolvedCommit> ResolveAsync()
+    {
+        if (resolved is { } cached)
+        {
+            return cached;
+        }
+
         await gate.WaitAsync().ConfigureAwait(false);
         try
         {
-            // Only one commit exists, and the server only asks for commits it was given, so the tree is always
-            // the one this instance already built.
-            return (await MaterializeAsync().ConfigureAwait(false)).Tree;
+            resolved ??= await history.ResolveAsync(scope, snapshot, CancellationToken.None).ConfigureAwait(false);
+            return resolved;
         }
         finally
         {
             gate.Release();
         }
-    }
-
-    private async Task<(GitCommit Commit, GitTree Tree)> MaterializeAsync()
-    {
-        if (content is { } existing)
-        {
-            return existing;
-        }
-
-        var tree = KnowledgeTreeBuilder.Build(snapshot);
-        var treeId = await tree.ComputeIdAsync().ConfigureAwait(false);
-
-        var message = $"Knowledge base snapshot: {snapshot.DocumentCount} " +
-                      $"{(snapshot.DocumentCount == 1 ? "document" : "documents")} in {snapshot.DirectoryCount} " +
-                      $"{(snapshot.DirectoryCount == 1 ? "directory" : "directories")}";
-
-        var commit = GitCommit.Create()
-            .Tree(treeId)
-            .Author(options.AuthorName, options.AuthorEmail, snapshot.ChangedAt)
-            .Committer(options.AuthorName, options.AuthorEmail, snapshot.ChangedAt)
-            .Message(message)
-            .Build();
-
-        content = (commit, tree);
-        return content.Value;
     }
 }

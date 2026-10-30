@@ -24,22 +24,41 @@ public static class KnowledgeTreeBuilder
         NewLine = "\n"
     };
 
-    public static GitTree Build(KnowledgeSnapshot snapshot)
+    public static GitTree Build(KnowledgeSnapshot snapshot) => Build(Files(snapshot));
+
+    public static GitTree Build(IReadOnlyList<KnowledgeFile> files)
     {
-        ArgumentNullException.ThrowIfNull(snapshot);
+        ArgumentNullException.ThrowIfNull(files);
 
-        var builder = GitTree.Create()
-            .Add(ReadmeFileName, BuildReadme(snapshot))
-            .Add(
-                DocumentTransferService.ManifestEntryName,
-                BuildManifest(snapshot));
-
-        foreach (var document in snapshot.Documents)
+        var builder = GitTree.Create();
+        foreach (var file in files)
         {
-            builder.Add(document.Path, Normalize(document.Content));
+            builder.Add(file.Path, file.Content);
         }
 
         return builder.Build();
+    }
+
+    /// <summary>
+    /// The files of the snapshot with the exact content git will store. The list is also what a stored commit
+    /// keeps, so a tree can be rebuilt for a client that asks for an older commit.
+    /// </summary>
+    public static IReadOnlyList<KnowledgeFile> Files(KnowledgeSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+
+        var files = new List<KnowledgeFile>
+        {
+            new(ReadmeFileName, BuildReadme(snapshot)),
+            new(DocumentTransferService.ManifestEntryName, BuildManifest(snapshot))
+        };
+
+        foreach (var document in snapshot.Documents)
+        {
+            files.Add(new KnowledgeFile(document.Path, Normalize(document.Content)));
+        }
+
+        return files;
     }
 
     public static string BuildManifest(KnowledgeSnapshot snapshot)
@@ -119,3 +138,6 @@ public static class KnowledgeTreeBuilder
     /// </summary>
     private static string Normalize(string content) => content.Replace("\r\n", "\n", StringComparison.Ordinal);
 }
+
+/// <summary>One file of the repository: the path it has in the tree and the content git stores for it.</summary>
+public sealed record KnowledgeFile(string Path, string Content);

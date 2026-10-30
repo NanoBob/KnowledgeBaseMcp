@@ -59,6 +59,7 @@ The tag defaults to `latest`. Set `AGENT_KNOWLEDGE_BASE_REGISTRY_IMAGE` to the t
 | `Git__Path` | `/git/knowledge.git` | Path the repository is mounted at, which is also the clone URL. |
 | `Git__Branch` | `main` | Branch a clone checks out. |
 | `Git__AuthorName`, `Git__AuthorEmail` | `Knowledge Base`, `knowledge-base@localhost` | Author and committer of the generated commit. |
+| `Git__HistoryDepth` | `20` | How many commits per key scope stay available for `git pull`. |
 
 ## Managing directories and API keys
 
@@ -231,7 +232,7 @@ A clone always contains the entire repository, but that repository only holds wh
 
 The repository is read-only for every client. Only `git-upload-pack` is served, and `git-receive-pack` answers `403`, so documents change through the admin API and the MCP tools, never through a push.
 
-Each request renders the current documents into a single commit with no parent, so two clones taken at different times share no history and `git pull` reports unrelated histories. Re-clone, or `git fetch` and reset, to move to a newer snapshot; keeping a real commit history is the follow-up.
+The server remembers the commits it handed out, so a clone keeps a real history: `git pull` fast-forwards to the current documents instead of reporting unrelated histories. A new commit is only created when the rendered tree actually changes, and its timestamp is pushed past its parent so history stays ordered. History is tracked per key scope, which means keys that can read the same directories share a history and keys with different scopes never see each other's commits. `Git__HistoryDepth` (default `20`, `1`–`1000`) is how many commits per scope stay available; older ones are pruned together with the content only they used, and a clone that fell further behind than that has to be re-cloned.
 
 ## Name and content rules
 

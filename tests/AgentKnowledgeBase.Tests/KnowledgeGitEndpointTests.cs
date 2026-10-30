@@ -15,6 +15,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace AgentKnowledgeBase.Tests;
 
@@ -202,11 +203,7 @@ public partial class KnowledgeGitEndpointTests
         var advertised = AdvertisedCommit().Match(body);
         Assert.True(advertised.Success, "the advertisement did not contain a commit");
 
-        var expected = await new KnowledgeGitRepository(
-                await new KnowledgeSnapshotLoader(app.Directories, app.Documents)
-                    .LoadAsync(CallerFor(mine), default),
-                new GitOptions())
-            .GetCommitAsync();
+        var expected = await ExpectedCommitAsync(app, CallerFor(mine));
 
         Assert.Equal(expected.Id.ToString(), advertised.Groups[1].Value);
     }
@@ -291,6 +288,23 @@ public partial class KnowledgeGitEndpointTests
             "git",
             [.. directoryIds.Select(id => new KeyScope { DirectoryId = id, Access = AccessLevel.Read })]);
 
+    /// <summary>
+    /// The commit the endpoint should announce for a caller, computed with a history of its own so the value
+    /// does not depend on what the running host already stored.
+    /// </summary>
+    private static async Task<GitCommit> ExpectedCommitAsync(KnowledgeBaseApp app, ApiCaller caller)
+    {
+        var options = new GitOptions();
+        var snapshot = await new KnowledgeSnapshotLoader(app.Directories, app.Documents).LoadAsync(caller, default);
+
+        return await new KnowledgeGitRepository(
+                KnowledgeGitHistory.ScopeKey(caller),
+                snapshot,
+                new KnowledgeGitHistory(new FakeGitHistoryStore(), options),
+                options)
+            .GetCommitAsync();
+    }
+
     [GeneratedRegex("([0-9a-f]{40}) refs/heads/main")]
     private static partial Regex AdvertisedCommit();
 
@@ -349,6 +363,58 @@ public partial class KnowledgeGitEndpointTests
 
             Assert.NotEqual(0, push.ExitCode);
             Assert.Contains("403", push.Error + push.Output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteWorkspace(workspace);
+        }
+    }
+
+    /// <summary>
+    /// A clone keeps working after the knowledge base changes: the next commit descends from the one the clone
+    /// has, so git can fast-forward instead of asking for an unrelated history.
+    /// </summary>
+    [Fact]
+    public async Task A_clone_can_pull_a_document_added_after_the_clone()
+    {
+        if (!GitCli.IsAvailable)
+        {
+            return;
+        }
+
+        using var app = new KnowledgeBaseApp();
+        var directory = AddDirectory(app, "alpha");
+        AddDocument(app, directory, "one", "first");
+        var key = await CreateKeyAsync(app, directory);
+
+        await using var host = await GitTestHost.StartAsync(app);
+        var workspace = Directory.CreateTempSubdirectory("kb-git-pull-");
+        var checkout = Path.Combine(workspace.FullName, "checkout");
+
+        try
+        {
+            var clone = await GitCli.RunAsync(
+                workspace.FullName,
+                "clone",
+                host.AuthenticatedUrl(key),
+                checkout);
+
+            Assert.True(clone.ExitCode == 0, clone.Error);
+            Assert.True(File.Exists(Path.Combine(checkout, "alpha", "one.md")));
+            Assert.False(File.Exists(Path.Combine(checkout, "alpha", "two.md")));
+
+            AddDocument(app, directory, "two", "second");
+
+            var pull = await GitCli.RunAsync(checkout, "pull");
+
+            Assert.True(pull.ExitCode == 0, pull.Error + pull.Output);
+
+            var added = Path.Combine(checkout, "alpha", "two.md");
+            Assert.True(File.Exists(added), $"expected {added} to exist");
+            Assert.Equal("second", File.ReadAllText(added).Trim());
+
+            var log = await GitCli.RunAsync(checkout, "log", "--format=%s");
+            Assert.Contains("2 documents", log.Output, StringComparison.Ordinal);
         }
         finally
         {
@@ -477,11 +543,15 @@ internal sealed class GitTestHost : IAsyncDisposable
         builder.Services.AddSingleton<IDirectoryRepository>(app.Directories);
         builder.Services.AddSingleton<IDocumentRepository>(app.Documents);
         builder.Services.AddSingleton<IApiKeyRepository>(app.Keys);
+        builder.Services.AddSingleton<IGitHistoryStore>(app.GitHistory);
         builder.Services.AddSingleton<KnowledgeSnapshotLoader>();
         builder.Services.AddSingleton<ApiKeyService>();
         builder.Services.AddHttpContextAccessor();
         builder.Services.AddOptions<GitOptions>()
             .Configure(options => options.Enabled = true);
+        builder.Services.AddSingleton(sp => new KnowledgeGitHistory(
+            sp.GetRequiredService<IGitHistoryStore>(),
+            sp.GetRequiredService<IOptions<GitOptions>>().Value));
 
         var application = builder.Build();
         application.MapKnowledgeGit();
