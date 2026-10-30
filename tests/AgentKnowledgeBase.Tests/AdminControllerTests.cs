@@ -177,6 +177,71 @@ public sealed class AdminControllerContractTests
         Assert.Equal(1, error.LatestVersion);
     }
 
+    [Fact]
+    public async Task Restoring_a_revision_writes_its_content_as_the_newest_version()
+    {
+        using var app = new KnowledgeBaseApp();
+        using var client = app.CreateAdminClient();
+        var directory = await CreateDirectory(client, "dotnet");
+        var document = await CreateDocument(client, directory, "async-await");
+        Assert.Equal(HttpStatusCode.OK, (await client.PutAsJsonAsync($"/admin/documents/{document}", new
+        {
+            name = "async-await",
+            content = "# Async await, revised"
+        })).StatusCode);
+
+        var revisions = await client.GetFromJsonAsync<List<RevisionRow>>($"/admin/documents/{document}/revisions");
+        Assert.NotNull(revisions);
+        var first = revisions.Single(r => r.Version == 1);
+
+        var restored = await client.PostAsJsonAsync($"/admin/revisions/{first.Id}/restore", new { });
+
+        Assert.Equal(HttpStatusCode.OK, restored.StatusCode);
+        Assert.Equal(3, (await restored.Content.ReadFromJsonAsync<DocumentRow>())!.Version);
+        var detail = await client.GetFromJsonAsync<DocumentDetailRow>($"/admin/documents/{document}");
+        Assert.NotNull(detail);
+        Assert.Equal("# Async await", detail.Content);
+        Assert.Equal(3, detail.Version);
+        Assert.Equal(3, (await client.GetFromJsonAsync<List<RevisionRow>>($"/admin/documents/{document}/revisions"))!.Count);
+    }
+
+    [Fact]
+    public async Task Restoring_with_a_stale_expected_version_reports_the_latest_version()
+    {
+        using var app = new KnowledgeBaseApp();
+        using var client = app.CreateAdminClient();
+        var directory = await CreateDirectory(client, "dotnet");
+        var document = await CreateDocument(client, directory, "async-await");
+        var revisions = await client.GetFromJsonAsync<List<RevisionRow>>($"/admin/documents/{document}/revisions");
+        Assert.NotNull(revisions);
+
+        var response = await client.PostAsJsonAsync(
+            $"/admin/revisions/{revisions[0].Id}/restore",
+            new { expectedVersion = 99 });
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<ErrorEnvelope>();
+        Assert.NotNull(error);
+        Assert.Equal("conflict", error.Kind);
+        Assert.Equal(1, error.LatestVersion);
+    }
+
+    [Fact]
+    public async Task Restoring_an_unknown_revision_is_not_found()
+    {
+        using var app = new KnowledgeBaseApp();
+        using var client = app.CreateAdminClient();
+
+        var response = await client.PostAsJsonAsync($"/admin/revisions/{Guid.NewGuid()}/restore", new { });
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Equal("notfound", (await response.Content.ReadFromJsonAsync<ErrorEnvelope>())!.Kind);
+    }
+
+    private sealed record RevisionRow(Guid Id, int Version);
+
+    private sealed record DocumentDetailRow(Guid Id, string Content, int Version);
+
     private static async Task<Guid> CreateDirectory(HttpClient client, string name)
     {
         var response = await client.PostAsJsonAsync("/admin/directories", new { name, description = "" });
@@ -272,6 +337,14 @@ public sealed class AdminRouteSmokeTests
         Assert.NotNull(revisions);
         Assert.Equal(3, revisions.Count);
         Assert.Equal(HttpStatusCode.OK, (await client.GetAsync($"/admin/revisions/{revisions[0].Id}")).StatusCode);
+
+        // Restoring the oldest revision records a fourth one and puts the original content back.
+        var restored = await client.PostAsJsonAsync($"/admin/revisions/{revisions[^1].Id}/restore", new { });
+        Assert.Equal(HttpStatusCode.OK, restored.StatusCode);
+        var restoredRow = (await restored.Content.ReadFromJsonAsync<DocumentRow>())!;
+        Assert.Equal(4, restoredRow.Version);
+        Assert.False(restoredRow.Created);
+        Assert.Equal(4, (await client.GetFromJsonAsync<List<RevisionRow>>($"/admin/documents/{document}/revisions"))!.Count);
 
         // API keys
         var key = await client.PostAsJsonAsync("/admin/api-keys", new

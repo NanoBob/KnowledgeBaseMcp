@@ -9,4 +9,8 @@ export default defineConfig({
   preview: {
     port: 4173,
   },
+  // Monaco's editor worker is an ES module, and the default IIFE worker format cannot bundle it.
+  worker: {
+    format: 'es',
+  },
 })

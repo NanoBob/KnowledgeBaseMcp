@@ -172,6 +172,11 @@ export const api = {
   deleteDocument: (id: string) => request<void>(`/admin/documents/${id}`, { method: 'DELETE' }),
   listRevisions: (documentId: string) => request<RevisionSummary[]>(`/admin/documents/${documentId}/revisions`),
   getRevision: (revisionId: string) => request<RevisionDetail>(`/admin/revisions/${revisionId}`),
+  restoreRevision: (revisionId: string, expectedVersion?: number) =>
+    request<StoreDocumentResult>(`/admin/revisions/${revisionId}/restore`, {
+      method: 'POST',
+      body: JSON.stringify({ expectedVersion }),
+    }),
 
   listApiKeys: () => request<ApiKeySummary[]>('/admin/api-keys'),
   createApiKey: (input: NewApiKeyInput) =>

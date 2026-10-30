@@ -50,6 +50,7 @@ public sealed class AdminOpenApiTests
             "/admin/documents/{id}/revisions",
             "/admin/documents/{id}/move",
             "/admin/revisions/{id}",
+            "/admin/revisions/{id}/restore",
             "/admin/api-keys",
             "/admin/api-keys/{id}",
             "/admin/api-keys/{id}/regenerate",

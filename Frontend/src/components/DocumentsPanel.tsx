@@ -5,6 +5,7 @@ import type { Directory, DocumentDetail, DocumentSummary, RevisionDetail, Revisi
 import { Empty, Field, Modal, Skeleton, formatDate } from './ui'
 import type { Notifier } from './ui'
 import { Markdown } from './Markdown'
+import { ContentEditor, RevisionDiff } from './Editor'
 
 interface Draft {
   directoryId: string
@@ -136,6 +137,8 @@ export function DocumentsPanel({ directories, documents, notifier, onChanged }: 
   const [draft, setDraft] = useState<Draft>(emptyDraft(''))
   const [revisions, setRevisions] = useState<RevisionSummary[] | null>(null)
   const [revisionView, setRevisionView] = useState<RevisionDetail | null>(null)
+  const [picks, setPicks] = useState<string[]>([])
+  const [compare, setCompare] = useState<{ from: RevisionDetail; to: RevisionDetail } | null>(null)
   const [busy, setBusy] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [loadedId, setLoadedId] = useState<string | null>(null)
@@ -176,6 +179,7 @@ export function DocumentsPanel({ directories, documents, notifier, onChanged }: 
       setDetail(null)
       setRevisions(null)
       setMoveTarget(null)
+      setPicks([])
       return
     }
 
@@ -188,6 +192,7 @@ export function DocumentsPanel({ directories, documents, notifier, onChanged }: 
         setDetail(document)
         setDraft(fromDetail(document))
         setRevisions(null)
+        setPicks([])
         setFailedId(null)
         setLoadedId(document.id)
       })
@@ -285,6 +290,7 @@ export function DocumentsPanel({ directories, documents, notifier, onChanged }: 
     setSelection({ kind: 'new' })
     setDetail(null)
     setRevisions(null)
+    setPicks([])
     setDraft(emptyDraft(filter !== '' ? filter : (directories[0]?.id ?? '')))
   }
 
@@ -403,6 +409,7 @@ export function DocumentsPanel({ directories, documents, notifier, onChanged }: 
     if (selection.kind !== 'document') return
     if (revisions !== null) {
       setRevisions(null)
+      setPicks([])
       return
     }
     try {
@@ -419,6 +426,69 @@ export function DocumentsPanel({ directories, documents, notifier, onChanged }: 
       notifier.error(cause)
     }
   }
+
+  // Only two revisions can be compared, so a third pick pushes out the oldest one.
+  function togglePick(revisionId: string) {
+    setPicks((current) =>
+      current.includes(revisionId)
+        ? current.filter((id) => id !== revisionId)
+        : [...current, revisionId].slice(-2),
+    )
+  }
+
+  async function compareRevisions() {
+    if (picks.length !== 2) return
+    setBusy(true)
+    try {
+      const [first, second] = await Promise.all(picks.map((id) => api.getRevision(id)))
+      // The older revision is always the original side, whatever order they were ticked in.
+      const [from, to] = first.version <= second.version ? [first, second] : [second, first]
+      setCompare({ from, to })
+    } catch (cause) {
+      notifier.error(cause)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function reloadDocument(id: string) {
+    const fresh = await api.getDocument(id)
+    setDetail(fresh)
+    setDraft(fromDetail(fresh))
+    await onChanged()
+    setRevisions(await api.listRevisions(id))
+    return fresh
+  }
+
+  async function restoreRevision(revision: RevisionDetail) {
+    if (detail === null) return
+    if (!window.confirm(`Replace the current content with v${revision.version}'s content?`)) return
+
+    setBusy(true)
+    try {
+      const result = await api.restoreRevision(revision.id, detail.version)
+      await reloadDocument(detail.id)
+      setRevisionView(null)
+      setPicks([])
+      notifier.flash(`Restored v${revision.version} as v${result.version}.`)
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.status === 409) {
+        // Someone saved meanwhile; show their version so the user can decide again.
+        try {
+          await reloadDocument(detail.id)
+        } catch (refreshCause) {
+          notifier.error(refreshCause)
+        }
+      }
+      notifier.error(cause)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const pickedRevisions = (revisions ?? [])
+    .filter((revision) => picks.includes(revision.id))
+    .sort((a, b) => a.version - b.version)
 
   return (
     <>
@@ -610,13 +680,36 @@ export function DocumentsPanel({ directories, documents, notifier, onChanged }: 
 
               {revisions !== null ? (
                 <div className="history">
-                  <h3>Revision history</h3>
+                  <div className="history-head">
+                    <h3>Revision history</h3>
+                    <button
+                      type="button"
+                      onClick={() => void compareRevisions()}
+                      disabled={pickedRevisions.length !== 2 || busy}
+                      title={
+                        pickedRevisions.length === 2
+                          ? 'Open the difference between the two ticked revisions'
+                          : 'Tick two revisions to compare them'
+                      }
+                    >
+                      {pickedRevisions.length === 2
+                        ? `Compare v${pickedRevisions[0].version} → v${pickedRevisions[1].version}`
+                        : 'Compare'}
+                    </button>
+                  </div>
                   {revisions.length === 0 ? (
                     <p className="muted">No revisions recorded yet.</p>
                   ) : (
                     <ul className="history-list">
                       {revisions.map((revision) => (
                         <li key={revision.id}>
+                          <input
+                            type="checkbox"
+                            className="history-pick"
+                            checked={picks.includes(revision.id)}
+                            onChange={() => togglePick(revision.id)}
+                            aria-label={`Select version ${revision.version} for comparison`}
+                          />
                           <button type="button" onClick={() => void openRevision(revision.id)}>
                             <span className="pill">v{revision.version}</span>
                             <span className="history-name">{revision.name}</span>
@@ -647,12 +740,9 @@ export function DocumentsPanel({ directories, documents, notifier, onChanged }: 
                 }
               >
                 <div className={showPreview ? 'content-shell previewing' : 'content-shell'}>
-                  <textarea
-                    className="content"
+                  <ContentEditor
                     value={draft.content}
-                    onChange={(event) => setDraft({ ...draft, content: event.target.value })}
-                    spellCheck={false}
-                    placeholder={'# Heading\n\nWrite markdown here…'}
+                    onChange={(content) => setDraft((current) => ({ ...current, content }))}
                   />
                   {showPreview ? <Markdown source={draft.content} /> : null}
                 </div>
@@ -706,6 +796,40 @@ export function DocumentsPanel({ directories, documents, notifier, onChanged }: 
             </p>
           ) : null}
           <pre className="revision-content">{revisionView.content}</pre>
+          <div className="modal-actions">
+            <button
+              type="button"
+              className="primary"
+              onClick={() => void restoreRevision(revisionView)}
+              disabled={busy}
+              title="Write this revision's content as a new revision"
+            >
+              {busy ? 'Restoring…' : 'Restore content'}
+            </button>
+            <button type="button" onClick={() => setRevisionView(null)} disabled={busy}>
+              Close
+            </button>
+          </div>
+        </Modal>
+      ) : null}
+
+      {compare !== null ? (
+        <Modal
+          className="wide"
+          title={`Compare v${compare.from.version} → v${compare.to.version}`}
+          onClose={() => setCompare(null)}
+        >
+          <div className="diff-meta">
+            <span>
+              <span className="pill">v{compare.from.version}</span> {formatDate(compare.from.changedAt)} ·{' '}
+              {compare.from.changedBy}
+            </span>
+            <span>
+              <span className="pill">v{compare.to.version}</span> {formatDate(compare.to.changedAt)} ·{' '}
+              {compare.to.changedBy}
+            </span>
+          </div>
+          <RevisionDiff from={compare.from.content} to={compare.to.content} />
         </Modal>
       ) : null}
     </>

@@ -20,7 +20,7 @@ Three entities, all identified by GUID:
 | `get_knowledge_document` | Get one document by `id`, including markdown `content`. |
 | `store_knowledge_document` | Create or update a document. Updates require `expectedVersion`. |
 
-Creating a document requires `directoryId`, `name`, and `content`; the `id` is generated, so any agent with write access can add documents to its directories. Updating requires the `id` and the `version` you last read. A stale version returns a `409` telling the agent the document changed since it read it, so it refetches the document and re-applies its changes rather than overwriting the other agent's edit. An update replaces `summary`, `tags`, and `content`, so omitting `summary` clears it; omitting `name` keeps the current one. The agent tools never move a document between directories — that is an admin action (`POST /admin/documents/{id}/move` or the admin UI).
+Creating a document requires `directoryId`, `name`, and `content`; the `id` is generated, so any agent with write access can add documents to its directories. Updating requires the `id` and the `version` you last read. A stale version returns a `409` telling the agent the document changed since it read it, so it refetches the document and re-applies its changes rather than overwriting the other agent's edit. An update replaces `summary`, `tags`, and `content`, so omitting `summary` clears it; omitting `name` keeps the current one. The agent tools never move a document between directories — that is an admin action (`POST /admin/documents/{id}/move` or the admin UI). Restoring an old revision is admin-only for the same reason: `POST /admin/revisions/{id}/restore` or the admin UI.
 
 `search_knowledge` exists so an agent can find a document without reading the whole catalogue: it returns only the matching documents and the matching content lines, so a broad query costs a few KB instead of a context window. A paging caller of `list_knowledge_documents` repeats with `offset` increased by `limit` until fewer than `limit` rows come back; omitting both still returns every document.
 
@@ -102,6 +102,7 @@ Every call needs the admin token in an `X-Admin-Token` header (or `Authorization
 | `DELETE` | `/admin/documents/{id}` | Delete a document and its revisions. |
 | `GET` | `/admin/documents/{id}/revisions` | List revision metadata, newest first. |
 | `GET` | `/admin/revisions/{id}` | Read one revision snapshot, including content. |
+| `POST` | `/admin/revisions/{id}/restore` | Restore a revision's content as a new revision from `{ expectedVersion? }`. |
 | `GET` | `/admin/api-keys` | List keys without their secrets. |
 | `POST` | `/admin/api-keys` | Create a key; the plaintext key is returned once. |
 | `POST` | `/admin/api-keys/{id}/regenerate` | Issue a new secret for the same key and scopes; the old secret stops working. Returns the new plaintext once. |
@@ -115,6 +116,8 @@ Every call needs the admin token in an `X-Admin-Token` header (or `Authorization
 `POST /admin/documents` rejects a request that carries `expectedVersion` with a `404`, because a create has no prior version to compare against. Omit it to create the document.
 
 `POST /admin/documents/{id}/move` keeps the document's name, content and revision history, so the name must be free in the target directory; it bumps the version and records a revision that carries the new `directoryId`.
+
+`POST /admin/revisions/{id}/restore` copies that revision's content onto the document as a new revision. Only the content comes from the snapshot: the name, summary, tags and directory stay as they are now, so a restore cannot resurrect a name that has since been taken. It bumps the version and records a revision, and restoring the content a document already has still writes one. `expectedVersion` works like it does on `PUT /admin/documents/{id}`: omit it to restore over whatever is stored, or send the version you last read to get a `409` when someone else changed the document first.
 
 ### Swagger UI
 
@@ -180,7 +183,7 @@ Errors and confirmations appear as dismissible toasts stacked in the bottom-righ
 
 Screens:
 
-- **Documents** — filter and search by directory, edit metadata and markdown content in an editor that fills the window, toggle a sanitized markdown preview sidebar next to the textarea, move a document to another directory, delete documents, and open the revision history to read any snapshot. A skeleton placeholder fills the editor while a document loads.
+- **Documents** — filter and search by directory, edit metadata and markdown content in a Monaco editor that fills the window, toggle a sanitized markdown preview sidebar next to the editor, move a document to another directory, delete documents, open the revision history to read any snapshot, compare two revisions in a side-by-side or inline diff, and restore a revision's content as a new revision. A skeleton placeholder fills the editor while a document loads. Monaco is loaded lazily, so it costs nothing until a document is open.
 - **Directories** — create, rename and delete directories. A directory can only be deleted once it holds no documents.
 - **API keys** — create keys with one `read` or `readwrite` scope per directory, edit the scopes of an existing key,
   copy the plaintext key once, regenerate a key to rotate its secret in place, and revoke keys.

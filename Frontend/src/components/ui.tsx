@@ -32,11 +32,21 @@ export function ToastStack({ toasts, onDismiss }: { toasts: ToastItem[]; onDismi
   )
 }
 
-export function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+export function Modal({
+  title,
+  onClose,
+  className,
+  children,
+}: {
+  title: string
+  onClose: () => void
+  className?: string
+  children: ReactNode
+}) {
   return (
     <div className="modal-backdrop" onClick={onClose} role="presentation">
       <div
-        className="modal"
+        className={className ? `modal ${className}` : 'modal'}
         role="dialog"
         aria-modal="true"
         aria-label={title}
