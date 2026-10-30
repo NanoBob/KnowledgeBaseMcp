@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using AgentKnowledgeBase.Mcp;
 using AgentKnowledgeBase.Mcp.Domain;
@@ -305,6 +306,8 @@ public partial class KnowledgeGitEndpointTests
         using var app = new KnowledgeBaseApp();
         var directory = AddDirectory(app, "alpha");
         AddDocument(app, directory, "one", "the content");
+        var other = AddDirectory(app, "other");
+        AddDocument(app, other, "hidden", "not for this key");
         var key = await CreateKeyAsync(app, directory);
 
         await using var host = await GitTestHost.StartAsync(app);
@@ -326,6 +329,16 @@ public partial class KnowledgeGitEndpointTests
             Assert.Equal("the content", File.ReadAllText(document).Trim());
             Assert.True(File.Exists(Path.Combine(checkout, "README.md")));
             Assert.True(File.Exists(Path.Combine(checkout, "manifest.json")));
+
+            // A clone holds the whole repository, but that repository only contains what this key may read.
+            Assert.False(Directory.Exists(Path.Combine(checkout, "other")));
+
+            using var manifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(checkout, "manifest.json")));
+            var directories = manifest.RootElement.GetProperty("directories").EnumerateArray().ToList();
+            Assert.Equal("alpha", Assert.Single(directories).GetProperty("name").GetString());
+
+            var documents = manifest.RootElement.GetProperty("documents").EnumerateArray().ToList();
+            Assert.Equal("alpha/one.md", Assert.Single(documents).GetProperty("file").GetString());
 
             // A push must be refused by the server, not merely ignored by the client.
             File.AppendAllText(document, "\nlocal change\n");

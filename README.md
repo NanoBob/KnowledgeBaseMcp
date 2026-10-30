@@ -227,6 +227,8 @@ Every request builds the commit from the documents the key can read: `README.md`
 
 Only keys created with `allowGitRead` (or granted it later through `PUT /admin/api-keys/{id}/git-access`) may clone. Any other key gets `403` without a challenge, so a key handed to an agent for MCP calls cannot be reused to mirror the knowledge base.
 
+A clone always contains the entire repository, but that repository only holds what the presenting key may read: a key scoped to two directories clones those two directories and nothing else, and documents outside them are never fetched. There is no shared repository with hidden parts, so two keys with different scopes see different commits at the same URL, and a submodule pinned by one key cannot be fetched with another. Granting a key more scopes changes its commit on the next fetch.
+
 The repository is read-only for every client. Only `git-upload-pack` is served, and `git-receive-pack` answers `403`, so documents change through the admin API and the MCP tools, never through a push.
 
 Each request renders the current documents into a single commit with no parent, so two clones taken at different times share no history and `git pull` reports unrelated histories. Re-clone, or `git fetch` and reset, to move to a newer snapshot; keeping a real commit history is the follow-up.
