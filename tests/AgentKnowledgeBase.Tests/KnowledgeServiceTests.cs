@@ -455,6 +455,150 @@ public class KnowledgeServiceTests
     }
 
     [Fact]
+    public async Task Restore_CopiesTheOldContentIntoANewRevision()
+    {
+        var directoryId = await CreateDirectoryAsync();
+        var caller = Caller(Rw(directoryId));
+        var created = await _service.StoreAsync(caller, Create(directoryId, "Doc", "one"), default);
+        await _service.StoreAsync(
+            caller,
+            new StoreRequest(created.Id, null, "Renamed", "new summary", ["other"], "two", 1),
+            default);
+        var firstRevision = (await _service.ListRevisionsAsync(caller, created.Id, default))
+            .Single(r => r.Version == 1);
+
+        var result = await _service.RestoreAsync(caller, firstRevision.Id, null, default);
+
+        Assert.False(result.Created);
+        Assert.Equal(created.Id, result.Id);
+        Assert.Equal(directoryId, result.DirectoryId);
+        Assert.Equal("Renamed", result.Name);
+        Assert.Equal(3, result.Version);
+
+        // Only the content comes from the snapshot; the metadata stays as the document has it now.
+        var detail = await _service.GetAsync(caller, created.Id, default);
+        Assert.Equal("one", detail.Content);
+        Assert.Equal("Renamed", detail.Name);
+        Assert.Equal("new summary", detail.Summary);
+        Assert.Equal(["other"], detail.Tags);
+        Assert.Equal(3, detail.Version);
+        Assert.Equal("tester", detail.UpdatedBy);
+
+        Assert.Equal(3, _repo.Revisions.Count);
+        var latest = _repo.Revisions.OrderByDescending(r => r.Version).First();
+        Assert.Equal(3, latest.Version);
+        Assert.Equal("one", latest.Content);
+        Assert.Equal("tester", latest.ChangedBy);
+    }
+
+    [Fact]
+    public async Task Restore_WithStaleExpectedVersion_IsAConflictAndWritesNothing()
+    {
+        var directoryId = await CreateDirectoryAsync();
+        var caller = Caller(Rw(directoryId));
+        var created = await _service.StoreAsync(caller, Create(directoryId, "Doc", "one"), default);
+        await _service.StoreAsync(caller, new StoreRequest(created.Id, null, null, null, null, "two", 1), default);
+        var firstRevision = (await _service.ListRevisionsAsync(caller, created.Id, default))
+            .Single(r => r.Version == 1);
+
+        var ex = await Assert.ThrowsAsync<KnowledgeException>(() =>
+            _service.RestoreAsync(caller, firstRevision.Id, 1, default));
+
+        Assert.Equal(KnowledgeErrorKind.Conflict, ex.Kind);
+        Assert.Equal(2, ex.LatestVersion);
+        Assert.Equal("two", _repo.Documents[created.Id].Content);
+        Assert.Equal(2, _repo.Revisions.Count);
+    }
+
+    [Fact]
+    public async Task Restore_WithMatchingExpectedVersion_Succeeds()
+    {
+        var directoryId = await CreateDirectoryAsync();
+        var caller = Caller(Rw(directoryId));
+        var created = await _service.StoreAsync(caller, Create(directoryId, "Doc", "one"), default);
+        await _service.StoreAsync(caller, new StoreRequest(created.Id, null, null, null, null, "two", 1), default);
+        var firstRevision = (await _service.ListRevisionsAsync(caller, created.Id, default))
+            .Single(r => r.Version == 1);
+
+        var result = await _service.RestoreAsync(caller, firstRevision.Id, 2, default);
+
+        Assert.Equal(3, result.Version);
+        Assert.Equal("one", _repo.Documents[created.Id].Content);
+    }
+
+    [Fact]
+    public async Task Restore_UnknownRevision_IsNotFound()
+    {
+        var ex = await Assert.ThrowsAsync<KnowledgeException>(() =>
+            _service.RestoreAsync(ApiCaller.Admin, Guid.NewGuid(), null, default));
+
+        Assert.Equal(KnowledgeErrorKind.NotFound, ex.Kind);
+    }
+
+    [Fact]
+    public async Task Restore_WhenTheDocumentIsGone_IsNotFound()
+    {
+        var directoryId = await CreateDirectoryAsync();
+        var created = await _service.StoreAsync(Caller(Rw(directoryId)), Create(directoryId, "Doc", "one"), default);
+        var revision = (await _service.ListRevisionsAsync(Caller(Rw(directoryId)), created.Id, default)).Single();
+        _repo.Documents.Remove(created.Id);
+
+        var ex = await Assert.ThrowsAsync<KnowledgeException>(() =>
+            _service.RestoreAsync(Caller(Rw(directoryId)), revision.Id, null, default));
+
+        Assert.Equal(KnowledgeErrorKind.NotFound, ex.Kind);
+    }
+
+    [Fact]
+    public async Task Restore_OfHiddenDocument_LooksMissing()
+    {
+        var privateId = await CreateDirectoryAsync("private");
+        var created = await _service.StoreAsync(Caller(Rw(privateId)), Create(privateId, "Secret", "body"), default);
+        var revision = (await _service.ListRevisionsAsync(Caller(Rw(privateId)), created.Id, default)).Single();
+
+        var ex = await Assert.ThrowsAsync<KnowledgeException>(() =>
+            _service.RestoreAsync(Caller(Rw(Guid.NewGuid())), revision.Id, null, default));
+
+        Assert.Equal(KnowledgeErrorKind.NotFound, ex.Kind);
+        Assert.Equal(1, _repo.Documents[created.Id].Version);
+    }
+
+    [Fact]
+    public async Task Restore_WithoutWriteAccess_IsForbidden()
+    {
+        var directoryId = await CreateDirectoryAsync();
+        var created = await _service.StoreAsync(Caller(Rw(directoryId)), Create(directoryId, "Doc", "one"), default);
+        var revision = (await _service.ListRevisionsAsync(Caller(Rw(directoryId)), created.Id, default)).Single();
+
+        var ex = await Assert.ThrowsAsync<KnowledgeException>(() =>
+            _service.RestoreAsync(Caller(R(directoryId)), revision.Id, null, default));
+
+        Assert.Equal(KnowledgeErrorKind.Forbidden, ex.Kind);
+        Assert.Equal(1, _repo.Documents[created.Id].Version);
+    }
+
+    [Fact]
+    public async Task Restore_AfterMove_KeepsTheDocumentsCurrentDirectory()
+    {
+        var source = await CreateDirectoryAsync("source");
+        var target = await CreateDirectoryAsync("target");
+        var mover = Caller(Rw(source), Rw(target));
+        var created = await _service.StoreAsync(mover, Create(source, "Doc", "one"), default);
+        var preMoveRevision = (await _service.ListRevisionsAsync(mover, created.Id, default)).Single();
+        await _service.StoreAsync(mover, new StoreRequest(created.Id, null, null, null, null, "two", 1), default);
+        await _service.MoveAsync(mover, created.Id, target, null, default);
+
+        // The snapshot still records the source directory, but the restore lands where the document lives now.
+        var result = await _service.RestoreAsync(Caller(Rw(target)), preMoveRevision.Id, null, default);
+
+        Assert.Equal(target, result.DirectoryId);
+        var detail = await _service.GetAsync(Caller(Rw(target)), created.Id, default);
+        Assert.Equal("one", detail.Content);
+        Assert.Equal("Doc", detail.Name);
+        Assert.Equal(target, _repo.Revisions.OrderByDescending(r => r.Version).First().DirectoryId);
+    }
+
+    [Fact]
     public async Task AdminCaller_ReachesEveryDirectory()
     {
         var directoryId = await CreateDirectoryAsync();

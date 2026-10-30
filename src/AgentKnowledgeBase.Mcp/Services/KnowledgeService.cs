@@ -394,6 +394,84 @@ public sealed class KnowledgeService(IDocumentRepository documents, IDirectoryRe
         return new StoreResult(moved.Id, moved.DirectoryId, moved.Name, moved.Version, Created: false);
     }
 
+    /// <summary>
+    /// Writes the content a revision held as a new revision. The document keeps its current name, summary,
+    /// tags and directory, so restoring an old version cannot resurrect a name that has since been taken.
+    /// </summary>
+    public async Task<StoreResult> RestoreAsync(
+        ApiCaller caller,
+        Guid revisionId,
+        int? expectedVersion,
+        CancellationToken ct)
+    {
+        var revision = await documents.FindRevisionAsync(revisionId, ct);
+        if (revision is null)
+        {
+            throw KnowledgeException.NotFound($"revision '{revisionId}' was not found.");
+        }
+
+        // Access follows the document's current directory, like GetRevisionAsync, so a restore cannot reach
+        // a document that has been moved out of the caller's scope.
+        var existing = await documents.FindAsync(revision.DocumentId, ct);
+        if (existing is null || !caller.CanRead(existing.DirectoryId))
+        {
+            throw KnowledgeException.NotFound($"revision '{revisionId}' was not found.");
+        }
+
+        var directory = await directories.FindAsync(existing.DirectoryId, ct)
+            ?? throw KnowledgeException.NotFound($"directory '{existing.DirectoryId}' was not found.");
+
+        if (!caller.CanWrite(existing.DirectoryId))
+        {
+            throw KnowledgeException.Forbidden($"this key cannot write to directory '{directory.Name}'.");
+        }
+
+        if (expectedVersion is not null && expectedVersion != existing.Version)
+        {
+            throw KnowledgeException.Conflict(
+                $"document '{existing.Id}' has been updated since you read it: expected version {expectedVersion}, " +
+                $"current version {existing.Version}. {RefetchAdvice(existing.Version)}",
+                existing.Version);
+        }
+
+        var restored = new KnowledgeDocument
+        {
+            Id = existing.Id,
+            DirectoryId = existing.DirectoryId,
+            Name = existing.Name,
+            Summary = existing.Summary,
+            Tags = existing.Tags,
+            Content = revision.Content,
+            Version = existing.Version + 1,
+            CreatedAt = existing.CreatedAt,
+            UpdatedAt = DateTime.UtcNow,
+            CreatedBy = existing.CreatedBy,
+            UpdatedBy = caller.Name
+        };
+
+        switch (await documents.TryReplaceAsync(restored, existing.Version, ct))
+        {
+            case ReplaceOutcome.NameConflict:
+                throw KnowledgeException.Conflict(
+                    $"a document named '{restored.Name}' already exists in directory '{directory.Name}'.");
+            case ReplaceOutcome.VersionMismatch:
+                var latest = await documents.FindAsync(restored.Id, ct);
+                if (latest is null)
+                {
+                    throw KnowledgeException.Conflict(
+                        $"document '{restored.Id}' was deleted while restoring. Nothing was written.");
+                }
+
+                throw KnowledgeException.Conflict(
+                    $"document '{restored.Id}' has been updated by someone else while restoring; it is now at version {latest.Version}. " +
+                    RefetchAdvice(latest.Version),
+                    latest.Version);
+        }
+
+        await RecordRevisionAsync(restored, ct);
+        return new StoreResult(restored.Id, restored.DirectoryId, restored.Name, restored.Version, Created: false);
+    }
+
     private async Task<StoreResult> CreateAsync(
         ApiCaller caller,
         StoreRequest request,

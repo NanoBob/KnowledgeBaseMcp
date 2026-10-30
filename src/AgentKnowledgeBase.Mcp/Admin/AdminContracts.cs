@@ -36,6 +36,8 @@ public sealed record StoreDocumentResponse(Guid Id, Guid DirectoryId, string Nam
 
 public sealed record MoveDocumentRequest(Guid? DirectoryId, int? ExpectedVersion);
 
+public sealed record RestoreRevisionRequest(int? ExpectedVersion);
+
 public sealed record ExportDocumentsRequest(List<Guid>? DirectoryIds);
 
 public sealed record ImportDocumentsResponse(
