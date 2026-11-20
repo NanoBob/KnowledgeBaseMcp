@@ -76,3 +76,19 @@ export interface ApiKeyCreated {
   scopes: KeyScope[]
   createdAt: string
 }
+
+/** What an import does with a document whose name already exists in the target directory. */
+export type ImportConflictMode = 'overwrite' | 'skip' | 'fail'
+
+export interface ImportResult {
+  directoriesCreated: number
+  documentsCreated: number
+  documentsUpdated: number
+  documentsSkipped: number
+}
+
+/** A downloaded archive plus the filename the server chose for it. */
+export interface ExportArchive {
+  blob: Blob
+  filename: string
+}

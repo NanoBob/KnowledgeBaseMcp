@@ -625,6 +625,77 @@ main {
   user-select: all;
 }
 
+/* ---------- transfer ---------- */
+
+.check-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.check-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 240px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.check-row .doc-count {
+  margin-left: auto;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.import-result {
+  padding: 12px 14px;
+  background: rgb(63 185 80 / 8%);
+  border: 1px solid rgb(63 185 80 / 35%);
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.import-result-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.result-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 10px;
+}
+
+.result-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.result-stat strong {
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+}
+
+.result-stat span {
+  font-size: 12px;
+  color: var(--muted);
+}
+
 /* ---------- tables ---------- */
 
 .grid {

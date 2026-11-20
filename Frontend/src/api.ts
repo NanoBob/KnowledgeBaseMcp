@@ -4,6 +4,9 @@ import type {
   Directory,
   DocumentDetail,
   DocumentSummary,
+  ExportArchive,
+  ImportConflictMode,
+  ImportResult,
   KeyScope,
   RevisionDetail,
   RevisionSummary,
@@ -97,32 +100,58 @@ function describeErrorBody(body: ErrorBody): DescribedError {
   return { message: body.error ?? body.detail ?? body.title, kind, latestVersion }
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+function baseHeaders(init: RequestInit): Headers {
   const headers = new Headers(init.headers)
   headers.set('Accept', 'application/json')
-  if (init.body !== undefined) headers.set('Content-Type', 'application/json')
+  // FormData has to keep the browser-generated multipart boundary, so only string bodies are JSON.
+  if (typeof init.body === 'string') headers.set('Content-Type', 'application/json')
   if (adminToken.length > 0) headers.set('X-Admin-Token', adminToken)
+  return headers
+}
 
-  const response = await fetch(`${BASE}${path}`, { ...init, headers })
-  if (!response.ok) {
-    let message = `Request failed with status ${response.status}.`
-    let kind: string | undefined
-    let latestVersion: number | null = null
-    try {
-      const body = (await response.json()) as ErrorBody
-      const described = describeErrorBody(body)
-      if (described.message) message = described.message
-      kind = described.kind
-      latestVersion = described.latestVersion
-    } catch {
-      // Non-JSON error body, keep the status message.
-    }
-    if (response.status === 401) message = 'The admin token was rejected. Check the token and try again.'
-    throw new ApiError(response.status, message, kind, latestVersion)
+async function failure(response: Response): Promise<never> {
+  let message = `Request failed with status ${response.status}.`
+  let kind: string | undefined
+  let latestVersion: number | null = null
+  try {
+    const body = (await response.json()) as ErrorBody
+    const described = describeErrorBody(body)
+    if (described.message) message = described.message
+    kind = described.kind
+    latestVersion = described.latestVersion
+  } catch {
+    // Non-JSON error body, keep the status message.
   }
+  if (response.status === 401) message = 'The admin token was rejected. Check the token and try again.'
+  throw new ApiError(response.status, message, kind, latestVersion)
+}
+
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const response = await fetch(`${BASE}${path}`, { ...init, headers: baseHeaders(init) })
+  if (!response.ok) await failure(response)
 
   if (response.status === 204) return undefined as T
   return (await response.json()) as T
+}
+
+function filenameFrom(disposition: string | null): string {
+  if (disposition === null) return 'knowledge-export.zip'
+  const quoted = /filename="([^"]+)"/i.exec(disposition)
+  if (quoted !== null) return quoted[1]
+  const bare = /filename=([^;]+)/i.exec(disposition)
+  return bare !== null ? bare[1].trim() : 'knowledge-export.zip'
+}
+
+async function download(path: string, init: RequestInit): Promise<ExportArchive> {
+  const headers = baseHeaders(init)
+  headers.set('Accept', 'application/zip, application/json')
+  const response = await fetch(`${BASE}${path}`, { ...init, headers })
+  if (!response.ok) await failure(response)
+
+  return {
+    blob: await response.blob(),
+    filename: filenameFrom(response.headers.get('Content-Disposition')),
+  }
 }
 
 export interface DirectoryInput {
@@ -186,4 +215,15 @@ export const api = {
     request<ApiKeyCreated>(`/admin/api-keys/${id}/regenerate`, { method: 'POST' }),
   updateApiKeyScopes: (id: string, scopes: KeyScope[]) =>
     request<ApiKeySummary>(`/admin/api-keys/${id}/scopes`, { method: 'PUT', body: JSON.stringify({ scopes }) }),
+
+  exportDocuments: (directoryIds: string[]) =>
+    download('/admin/transfer/export', { method: 'POST', body: JSON.stringify({ directoryIds }) }),
+  importDocuments: (file: File, conflict: ImportConflictMode) => {
+    const body = new FormData()
+    body.append('file', file)
+    return request<ImportResult>(`/admin/transfer/import?conflict=${encodeURIComponent(conflict)}`, {
+      method: 'POST',
+      body,
+    })
+  },
 }
