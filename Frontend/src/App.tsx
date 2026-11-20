@@ -5,15 +5,17 @@ import type { Directory, DocumentSummary, PendingKeySecret } from './types'
 import { ApiKeysPanel } from './components/ApiKeysPanel'
 import { DirectoriesPanel } from './components/DirectoriesPanel'
 import { DocumentsPanel } from './components/DocumentsPanel'
+import { TransferPanel } from './components/TransferPanel'
 import { ToastStack } from './components/ui'
 import type { Notifier, ToastItem, ToastKind } from './components/ui'
 
-type Tab = 'documents' | 'directories' | 'keys'
+type Tab = 'documents' | 'directories' | 'keys' | 'transfer'
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'documents', label: 'Documents' },
   { id: 'directories', label: 'Directories' },
   { id: 'keys', label: 'API keys' },
+  { id: 'transfer', label: 'Import / export' },
 ]
 
 export default function App() {
@@ -204,6 +206,14 @@ export default function App() {
             notifier={notifier}
             secret={pendingSecret}
             onSecretChange={setPendingSecret}
+          />
+        ) : null}
+        {tab === 'transfer' ? (
+          <TransferPanel
+            directories={directories}
+            documents={documents}
+            notifier={notifier}
+            onChanged={reload}
           />
         ) : null}
       </main>

@@ -146,6 +146,8 @@ The manifest carries the directory descriptions and each document's `name`, `sum
 
 An archive without a `manifest.json` is also accepted: every `.md` file is imported into a directory named after the folder that holds it, with the document name taken from the file name (sub-folders become part of the name). Folder names are slugified to fit the directory rules, so `Team Docs` becomes `team-docs` and `Café` becomes `cafe`; two folders that slugify to the same name are rejected. A folder name with no ASCII letters or digits left after slugifying (a Chinese or Japanese name, for example) has no usable directory name, so such an archive is rejected and needs a manifest. Such documents get an empty summary and no tags. A `.md` file that sits outside any folder has no directory to belong to, so an archive containing one is rejected rather than silently dropping it.
 
+The admin UI's **Import / export** screen drives both endpoints, so the curl examples below are only needed for scripting.
+
 ```bash
 curl -X POST http://localhost:8080/admin/transfer/export \
   -H "X-Admin-Token: $ADMIN_TOKEN" -H "Content-Type: application/json" \
@@ -169,7 +171,7 @@ the envelope above.
 
 ## Admin UI
 
-`Frontend/` holds a small React + Vite single-page app for managing directories, documents, revisions and API keys.
+`Frontend/` holds a small React + Vite single-page app for managing directories, documents, revisions, API keys and archive transfer.
 
 ```
 cd Frontend
@@ -187,6 +189,9 @@ Screens:
 - **Directories** — create, rename and delete directories. A directory can only be deleted once it holds no documents.
 - **API keys** — create keys with one `read` or `readwrite` scope per directory, edit the scopes of an existing key,
   copy the plaintext key once, regenerate a key to rotate its secret in place, and revoke keys.
+- **Import / export** — download a `.zip` of the selected directories and import such an archive back, choosing
+  `overwrite`, `skip` or `fail` for existing document names. The result reports how many directories and documents were
+  created, updated or skipped.
 
 `npm run build` produces a static bundle in `Frontend/dist`.
 
