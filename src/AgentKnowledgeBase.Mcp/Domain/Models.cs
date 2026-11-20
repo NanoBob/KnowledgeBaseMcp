@@ -81,16 +81,28 @@ public sealed class ApiKeyRecord
     public string Name { get; set; } = "";
     public string KeyHash { get; set; } = "";
     public List<KeyScope> Scopes { get; set; } = [];
+
+    /// <summary>
+    /// Whether the key may clone the read-only git repository. Keys issued before the endpoint existed
+    /// deserialize to false, which keeps the git endpoint closed to them until it is granted.
+    /// </summary>
+    public bool AllowGitRead { get; set; }
+
     public DateTime CreatedAt { get; set; }
     public DateTime? RotatedAt { get; set; }
     public DateTime? RevokedAt { get; set; }
 }
 
 /// <summary>An authenticated API key for the current request.</summary>
-public sealed record ApiCaller(Guid KeyId, string Name, IReadOnlyList<KeyScope> Scopes, bool IsAdmin = false)
+public sealed record ApiCaller(
+    Guid KeyId,
+    string Name,
+    IReadOnlyList<KeyScope> Scopes,
+    bool IsAdmin = false,
+    bool AllowGitRead = false)
 {
     /// <summary>Full access, used by the admin API which authenticates with the admin token instead of a key.</summary>
-    public static ApiCaller Admin { get; } = new(Guid.Empty, "admin", [], IsAdmin: true);
+    public static ApiCaller Admin { get; } = new(Guid.Empty, "admin", [], IsAdmin: true, AllowGitRead: true);
 
     public AccessLevel? AccessFor(Guid directoryId) =>
         IsAdmin ? AccessLevel.ReadWrite : AccessPolicy.GetLevel(Scopes, directoryId);

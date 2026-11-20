@@ -29,7 +29,7 @@ public class ApiKeyServiceTests
         var directoryId = await CreateDirectoryAsync();
 
         var (record, plain) = await _service.CreateAsync("agent-a",
-            [new KeyScopeInput(directoryId, "readwrite")], default);
+            [new KeyScopeInput(directoryId, "readwrite")], false, default);
 
         Assert.StartsWith("akb_", plain);
         Assert.NotEqual(plain, record.KeyHash);
@@ -43,7 +43,7 @@ public class ApiKeyServiceTests
     public async Task Authenticate_ValidKey_ReturnsCaller()
     {
         var directoryId = await CreateDirectoryAsync();
-        var (record, plain) = await _service.CreateAsync("agent-a", [new KeyScopeInput(directoryId, "read")], default);
+        var (record, plain) = await _service.CreateAsync("agent-a", [new KeyScopeInput(directoryId, "read")], false, default);
 
         var caller = await _service.AuthenticateAsync(plain, default);
 
@@ -58,7 +58,7 @@ public class ApiKeyServiceTests
     public async Task Authenticate_UnknownOrMalformedKey_ReturnsNull()
     {
         var directoryId = await CreateDirectoryAsync();
-        await _service.CreateAsync("agent-a", [new KeyScopeInput(directoryId, "read")], default);
+        await _service.CreateAsync("agent-a", [new KeyScopeInput(directoryId, "read")], false, default);
 
         Assert.Null(await _service.AuthenticateAsync("akb_not-a-real-key", default));
         Assert.Null(await _service.AuthenticateAsync("not-prefixed", default));
@@ -69,7 +69,7 @@ public class ApiKeyServiceTests
     public async Task Authenticate_RevokedKey_ReturnsNull()
     {
         var directoryId = await CreateDirectoryAsync();
-        var (record, plain) = await _service.CreateAsync("agent-a", [new KeyScopeInput(directoryId, "read")], default);
+        var (record, plain) = await _service.CreateAsync("agent-a", [new KeyScopeInput(directoryId, "read")], false, default);
 
         await _service.RevokeAsync(record.Id, default);
 
@@ -80,7 +80,7 @@ public class ApiKeyServiceTests
     public async Task Revoke_AlreadyRevoked_IsNotFound()
     {
         var directoryId = await CreateDirectoryAsync();
-        var (record, _) = await _service.CreateAsync("agent-a", [new KeyScopeInput(directoryId, "read")], default);
+        var (record, _) = await _service.CreateAsync("agent-a", [new KeyScopeInput(directoryId, "read")], false, default);
         await _service.RevokeAsync(record.Id, default);
 
         var ex = await Assert.ThrowsAsync<KnowledgeException>(() => _service.RevokeAsync(record.Id, default));
@@ -98,7 +98,7 @@ public class ApiKeyServiceTests
         var directoryId = await CreateDirectoryAsync();
 
         var ex = await Assert.ThrowsAsync<KnowledgeException>(() =>
-            _service.CreateAsync("agent-a", [new KeyScopeInput(directoryId, access)], default));
+            _service.CreateAsync("agent-a", [new KeyScopeInput(directoryId, access)], false, default));
 
         Assert.Equal(KnowledgeErrorKind.Validation, ex.Kind);
     }
@@ -107,7 +107,7 @@ public class ApiKeyServiceTests
     public async Task Create_RequiresAtLeastOneScope()
     {
         var ex = await Assert.ThrowsAsync<KnowledgeException>(() =>
-            _service.CreateAsync("agent-a", [], default));
+            _service.CreateAsync("agent-a", [], false, default));
 
         Assert.Equal(KnowledgeErrorKind.Validation, ex.Kind);
     }
@@ -116,7 +116,7 @@ public class ApiKeyServiceTests
     public async Task Create_RejectsUnknownDirectory()
     {
         var ex = await Assert.ThrowsAsync<KnowledgeException>(() =>
-            _service.CreateAsync("agent-a", [new KeyScopeInput(Guid.NewGuid(), "read")], default));
+            _service.CreateAsync("agent-a", [new KeyScopeInput(Guid.NewGuid(), "read")], false, default));
 
         Assert.Equal(KnowledgeErrorKind.NotFound, ex.Kind);
     }
@@ -125,7 +125,7 @@ public class ApiKeyServiceTests
     public async Task Create_RequiresDirectoryOnEachScope()
     {
         var ex = await Assert.ThrowsAsync<KnowledgeException>(() =>
-            _service.CreateAsync("agent-a", [new KeyScopeInput(null, "read")], default));
+            _service.CreateAsync("agent-a", [new KeyScopeInput(null, "read")], false, default));
 
         Assert.Equal(KnowledgeErrorKind.Validation, ex.Kind);
     }
@@ -136,7 +136,7 @@ public class ApiKeyServiceTests
         var directoryId = await CreateDirectoryAsync();
 
         var (record, _) = await _service.CreateAsync("agent-a",
-            [new KeyScopeInput(directoryId, "read"), new KeyScopeInput(directoryId, "readwrite")], default);
+            [new KeyScopeInput(directoryId, "read"), new KeyScopeInput(directoryId, "readwrite")], false, default);
 
         var scope = Assert.Single(record.Scopes);
         Assert.Equal(AccessLevel.ReadWrite, scope.Access);
@@ -147,7 +147,7 @@ public class ApiKeyServiceTests
     {
         var directoryId = await CreateDirectoryAsync();
         var (original, oldPlain) = await _service.CreateAsync("agent-a",
-            [new KeyScopeInput(directoryId, "readwrite")], default);
+            [new KeyScopeInput(directoryId, "readwrite")], false, default);
 
         var (rotated, newPlain) = await _service.RegenerateAsync(original.Id, default);
 
@@ -166,7 +166,7 @@ public class ApiKeyServiceTests
     {
         var directoryId = await CreateDirectoryAsync();
         var (original, oldPlain) = await _service.CreateAsync("agent-a",
-            [new KeyScopeInput(directoryId, "read")], default);
+            [new KeyScopeInput(directoryId, "read")], false, default);
 
         var (_, newPlain) = await _service.RegenerateAsync(original.Id, default);
 
@@ -191,7 +191,7 @@ public class ApiKeyServiceTests
     public async Task Regenerate_RevokedKey_IsNotFound()
     {
         var directoryId = await CreateDirectoryAsync();
-        var (record, _) = await _service.CreateAsync("agent-a", [new KeyScopeInput(directoryId, "read")], default);
+        var (record, _) = await _service.CreateAsync("agent-a", [new KeyScopeInput(directoryId, "read")], false, default);
         await _service.RevokeAsync(record.Id, default);
 
         var ex = await Assert.ThrowsAsync<KnowledgeException>(() => _service.RegenerateAsync(record.Id, default));
@@ -205,7 +205,7 @@ public class ApiKeyServiceTests
         var engineering = await CreateDirectoryAsync("engineering");
         var review = await CreateDirectoryAsync("review");
         var (original, plain) = await _service.CreateAsync("agent-a",
-            [new KeyScopeInput(engineering, "readwrite")], default);
+            [new KeyScopeInput(engineering, "readwrite")], false, default);
 
         var updated = await _service.UpdateScopesAsync(original.Id,
             [new KeyScopeInput(review, "read")], default);
@@ -227,7 +227,7 @@ public class ApiKeyServiceTests
     public async Task UpdateScopes_CanWidenAccess()
     {
         var directoryId = await CreateDirectoryAsync();
-        var (original, plain) = await _service.CreateAsync("agent-a", [new KeyScopeInput(directoryId, "read")], default);
+        var (original, plain) = await _service.CreateAsync("agent-a", [new KeyScopeInput(directoryId, "read")], false, default);
 
         await _service.UpdateScopesAsync(original.Id, [new KeyScopeInput(directoryId, "readwrite")], default);
 
@@ -251,7 +251,7 @@ public class ApiKeyServiceTests
     public async Task UpdateScopes_RevokedKey_IsNotFound()
     {
         var directoryId = await CreateDirectoryAsync();
-        var (record, _) = await _service.CreateAsync("agent-a", [new KeyScopeInput(directoryId, "read")], default);
+        var (record, _) = await _service.CreateAsync("agent-a", [new KeyScopeInput(directoryId, "read")], false, default);
         await _service.RevokeAsync(record.Id, default);
 
         var ex = await Assert.ThrowsAsync<KnowledgeException>(() =>
@@ -264,7 +264,7 @@ public class ApiKeyServiceTests
     public async Task UpdateScopes_RequiresAtLeastOneScope()
     {
         var directoryId = await CreateDirectoryAsync();
-        var (record, _) = await _service.CreateAsync("agent-a", [new KeyScopeInput(directoryId, "read")], default);
+        var (record, _) = await _service.CreateAsync("agent-a", [new KeyScopeInput(directoryId, "read")], false, default);
 
         var ex = await Assert.ThrowsAsync<KnowledgeException>(() =>
             _service.UpdateScopesAsync(record.Id, [], default));
@@ -277,7 +277,7 @@ public class ApiKeyServiceTests
     public async Task UpdateScopes_RejectsUnknownDirectory()
     {
         var directoryId = await CreateDirectoryAsync();
-        var (record, _) = await _service.CreateAsync("agent-a", [new KeyScopeInput(directoryId, "read")], default);
+        var (record, _) = await _service.CreateAsync("agent-a", [new KeyScopeInput(directoryId, "read")], false, default);
 
         var ex = await Assert.ThrowsAsync<KnowledgeException>(() =>
             _service.UpdateScopesAsync(record.Id, [new KeyScopeInput(Guid.NewGuid(), "read")], default));
@@ -294,7 +294,7 @@ public class ApiKeyServiceTests
     public async Task UpdateScopes_RejectsInvalidAccess(string access)
     {
         var directoryId = await CreateDirectoryAsync();
-        var (record, _) = await _service.CreateAsync("agent-a", [new KeyScopeInput(directoryId, "read")], default);
+        var (record, _) = await _service.CreateAsync("agent-a", [new KeyScopeInput(directoryId, "read")], false, default);
 
         var ex = await Assert.ThrowsAsync<KnowledgeException>(() =>
             _service.UpdateScopesAsync(record.Id, [new KeyScopeInput(directoryId, access)], default));
@@ -306,11 +306,76 @@ public class ApiKeyServiceTests
     public async Task UpdateScopes_DedupesScopesKeepingHighestAccess()
     {
         var directoryId = await CreateDirectoryAsync();
-        var (record, _) = await _service.CreateAsync("agent-a", [new KeyScopeInput(directoryId, "read")], default);
+        var (record, _) = await _service.CreateAsync("agent-a", [new KeyScopeInput(directoryId, "read")], false, default);
 
         var updated = await _service.UpdateScopesAsync(record.Id,
             [new KeyScopeInput(directoryId, "read"), new KeyScopeInput(directoryId, "readwrite")], default);
 
         Assert.Equal(AccessLevel.ReadWrite, Assert.Single(updated.Scopes).Access);
+    }
+
+    [Fact]
+    public async Task Create_WithoutGitAccess_KeepsTheKeyClosedToGit()
+    {
+        var directoryId = await CreateDirectoryAsync();
+
+        var (record, plain) = await _service.CreateAsync("agent-a", [new KeyScopeInput(directoryId, "read")], false, default);
+
+        Assert.False(record.AllowGitRead);
+        var caller = await _service.AuthenticateAsync(plain, default);
+        Assert.NotNull(caller);
+        Assert.False(caller.AllowGitRead);
+    }
+
+    [Fact]
+    public async Task Create_WithGitAccess_IsReportedOnTheCaller()
+    {
+        var directoryId = await CreateDirectoryAsync();
+
+        var (record, plain) = await _service.CreateAsync("reader", [new KeyScopeInput(directoryId, "read")], true, default);
+
+        Assert.True(record.AllowGitRead);
+        var caller = await _service.AuthenticateAsync(plain, default);
+        Assert.NotNull(caller);
+        Assert.True(caller.AllowGitRead);
+    }
+
+    [Fact]
+    public async Task UpdateGitAccess_TogglesWithoutTouchingScopesOrSecret()
+    {
+        var directoryId = await CreateDirectoryAsync();
+        var (record, plain) = await _service.CreateAsync("agent-a", [new KeyScopeInput(directoryId, "read")], false, default);
+
+        var granted = await _service.UpdateGitAccessAsync(record.Id, true, default);
+        Assert.True(granted.AllowGitRead);
+        Assert.Equal(record.KeyHash, granted.KeyHash);
+        Assert.Equal(directoryId, Assert.Single(granted.Scopes).DirectoryId);
+        Assert.True((await _service.AuthenticateAsync(plain, default))!.AllowGitRead);
+
+        var withdrawn = await _service.UpdateGitAccessAsync(record.Id, false, default);
+        Assert.False(withdrawn.AllowGitRead);
+        Assert.False((await _service.AuthenticateAsync(plain, default))!.AllowGitRead);
+    }
+
+    [Fact]
+    public async Task UpdateGitAccess_UnknownKey_IsNotFound()
+    {
+        var ex = await Assert.ThrowsAsync<KnowledgeException>(() =>
+            _service.UpdateGitAccessAsync(Guid.NewGuid(), true, default));
+
+        Assert.Equal(KnowledgeErrorKind.NotFound, ex.Kind);
+    }
+
+    [Fact]
+    public async Task UpdateGitAccess_RevokedKey_IsNotFound()
+    {
+        var directoryId = await CreateDirectoryAsync();
+        var (record, _) = await _service.CreateAsync("agent-a", [new KeyScopeInput(directoryId, "read")], false, default);
+        await _service.RevokeAsync(record.Id, default);
+
+        var ex = await Assert.ThrowsAsync<KnowledgeException>(() =>
+            _service.UpdateGitAccessAsync(record.Id, true, default));
+
+        Assert.Equal(KnowledgeErrorKind.NotFound, ex.Kind);
     }
 }
