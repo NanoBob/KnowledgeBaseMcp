@@ -431,4 +431,4 @@ dist/
 *.tsbuildinfo
 
 # Personal container publish wrapper (holds the registry host)
-scripts/*.local.bat
+*.local.bat
