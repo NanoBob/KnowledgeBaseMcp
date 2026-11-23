@@ -41,13 +41,13 @@ Data is stored in the `agent-knowledge-base-data` named volume. The volume name 
 
 ### Publish the container image
 
-`docker compose build mcp` produces the local image `agent-knowledge-base-mcp`. Push it to a registry with:
+`scripts\publish-container.bat [tag] [--no-build]` builds the image from the `Dockerfile` and pushes it:
 
 ```
-scripts\publish-container.bat [tag]
+scripts\publish-container.bat
 ```
 
-The tag defaults to `latest`. Set `AGENT_KNOWLEDGE_BASE_REGISTRY_IMAGE` to the target image without a tag — either in the environment or as a line in the git-ignored `.env` file — for example `AGENT_KNOWLEDGE_BASE_REGISTRY_IMAGE=registry.example.com/namespace/agent-knowledge-base-mcp`. The registry host is never stored in the repository.
+No separate release build is needed — the Dockerfile publishes the project itself. The tag defaults to `latest`; `--no-build` pushes the existing local image instead of rebuilding it. Set `AGENT_KNOWLEDGE_BASE_REGISTRY_IMAGE` to the target image without a tag — either in the environment or as a line in the git-ignored `.env` file — for example `AGENT_KNOWLEDGE_BASE_REGISTRY_IMAGE=registry.example.com/namespace/agent-knowledge-base-mcp`. The registry host is never stored in the repository; a git-ignored wrapper such as `scripts\publish-container.local.bat` can set the variable and call this script. Log in first with `docker login <registry-host>`.
 
 ## Configuration
 
