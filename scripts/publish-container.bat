@@ -22,42 +22,89 @@ if "%AGENT_KNOWLEDGE_BASE_REGISTRY_IMAGE%"=="" (
 )
 
 set IMAGE=agent-knowledge-base-mcp
+set FRONTEND_IMAGE=%IMAGE%-frontend
 set TAG=latest
 set BUILD=1
+set PUBLISH_API=1
+set PUBLISH_FRONTEND=0
+
+set "FRONTEND_BUILD_ARGS="
+if defined FRONTEND_API_BASE set "FRONTEND_BUILD_ARGS=--build-arg VITE_API_BASE=%FRONTEND_API_BASE%"
 
 :parse
 if "%~1"=="" goto parsed
-if /i "%~1"=="--no-build" (
-    set BUILD=0
-) else (
-    set TAG=%~1
-)
+if /i "%~1"=="--no-build" goto arg_no_build
+if /i "%~1"=="--api" goto arg_api
+if /i "%~1"=="--frontend" goto arg_frontend
+if /i "%~1"=="--all" goto arg_all
+set TAG=%~1
 shift
 goto parse
+
+:arg_no_build
+set BUILD=0
+shift
+goto parse
+
+:arg_api
+set PUBLISH_API=1
+set PUBLISH_FRONTEND=0
+shift
+goto parse
+
+:arg_frontend
+set PUBLISH_API=0
+set PUBLISH_FRONTEND=1
+shift
+goto parse
+
+:arg_all
+set PUBLISH_API=1
+set PUBLISH_FRONTEND=1
+shift
+goto parse
+
 :parsed
 
-if "%BUILD%"=="1" (
-    echo Building %IMAGE%:latest from Dockerfile...
-    docker build -f Dockerfile -t %IMAGE%:latest .
+if "%PUBLISH_API%"=="1" (
+    call :publish "%IMAGE%" "%AGENT_KNOWLEDGE_BASE_REGISTRY_IMAGE%" "Dockerfile" "." ""
     if errorlevel 1 goto fail
 )
 
-docker image inspect %IMAGE%:latest >nul 2>&1
-if errorlevel 1 (
-    echo Image %IMAGE%:latest not found. Run again without --no-build to build it.
-    goto fail
+if "%PUBLISH_FRONTEND%"=="1" (
+    call :publish "%FRONTEND_IMAGE%" "%AGENT_KNOWLEDGE_BASE_REGISTRY_IMAGE%-frontend" "Frontend/Dockerfile" "Frontend" "%FRONTEND_BUILD_ARGS%"
+    if errorlevel 1 goto fail
 )
 
-set REMOTE=%AGENT_KNOWLEDGE_BASE_REGISTRY_IMAGE%:%TAG%
-
-echo Publishing %IMAGE%:latest as %REMOTE%
-docker tag %IMAGE%:latest %REMOTE%
-if errorlevel 1 goto fail
-
-docker push %REMOTE%
-if errorlevel 1 goto fail
-
 popd >nul
+exit /b 0
+
+:publish
+set "PKG_IMAGE=%~1"
+set "PKG_REGISTRY=%~2"
+set "PKG_DOCKERFILE=%~3"
+set "PKG_CONTEXT=%~4"
+set "PKG_ARGS=%~5"
+
+if "%BUILD%"=="1" (
+    echo Building %PKG_IMAGE%:latest from %PKG_DOCKERFILE%...
+    docker build -f "%PKG_DOCKERFILE%" -t "%PKG_IMAGE%:latest" %PKG_ARGS% "%PKG_CONTEXT%"
+    if errorlevel 1 exit /b 1
+)
+
+docker image inspect "%PKG_IMAGE%:latest" >nul 2>&1
+if errorlevel 1 (
+    echo Image %PKG_IMAGE%:latest not found. Run again without --no-build to build it.
+    exit /b 1
+)
+
+echo Publishing %PKG_IMAGE%:latest as %PKG_REGISTRY%:%TAG%
+docker tag "%PKG_IMAGE%:latest" "%PKG_REGISTRY%:%TAG%"
+if errorlevel 1 exit /b 1
+
+docker push "%PKG_REGISTRY%:%TAG%"
+if errorlevel 1 exit /b 1
+
 exit /b 0
 
 :fail

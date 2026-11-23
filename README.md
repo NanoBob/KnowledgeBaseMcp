@@ -41,13 +41,17 @@ Data is stored in the `agent-knowledge-base-data` named volume. The volume name 
 
 ### Publish the container image
 
-`scripts\publish-container.bat [tag] [--no-build]` builds the image from the `Dockerfile` and pushes it:
+`scripts\publish-container.bat [tag] [--no-build] [--frontend | --all]` builds an image and pushes it:
 
 ```
 scripts\publish-container.bat
 ```
 
-No separate release build is needed — the Dockerfile publishes the project itself. The tag defaults to `latest`; `--no-build` pushes the existing local image instead of rebuilding it. Set `AGENT_KNOWLEDGE_BASE_REGISTRY_IMAGE` to the target image without a tag — either in the environment or as a line in the git-ignored `.env` file — for example `AGENT_KNOWLEDGE_BASE_REGISTRY_IMAGE=registry.example.com/namespace/agent-knowledge-base-mcp`. The registry host is never stored in the repository; a git-ignored wrapper in the repository root, such as `publish-container.local.bat`, can set the variable and call this script. Log in first with `docker login <registry-host>`.
+No separate release build is needed — the Dockerfile publishes the project itself. The tag defaults to `latest`; `--no-build` pushes the existing local images instead of rebuilding them. The API image is published by default; `--frontend` publishes the admin UI instead, and `--all` publishes both.
+
+The admin UI is a separate static image built from `Frontend\Dockerfile` (nginx, port 8080) and pushed as `<registry-image>-frontend`. It calls the API on its own origin by default; set `FRONTEND_API_BASE` to the API's absolute URL, for example `https://api.example.com`, when the UI and API are served from different hosts. That value is baked in at build time, so the API's allowed origins must list the UI's origin.
+
+Set `AGENT_KNOWLEDGE_BASE_REGISTRY_IMAGE` to the target API image without a tag — either in the environment or as a line in the git-ignored `.env` file — for example `AGENT_KNOWLEDGE_BASE_REGISTRY_IMAGE=registry.example.com/namespace/agent-knowledge-base-mcp`. The registry host is never stored in the repository; a git-ignored wrapper in the repository root, such as `publish-container.local.bat`, can set the variable and call this script. Log in first with `docker login <registry-host>`.
 
 ## Configuration
 
