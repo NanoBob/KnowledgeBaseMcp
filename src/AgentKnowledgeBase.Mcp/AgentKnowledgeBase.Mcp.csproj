@@ -16,4 +16,10 @@
     <PackageReference Include="Swashbuckle.AspNetCore.SwaggerUI" Version="10.3.1" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Content Update="appsettings.local.json" CopyToPublishDirectory="Never" />
+    <Content Update="appsettings.*.local.json" CopyToPublishDirectory="Never" />
+    <Content Update="appsettings.local.*.json" CopyToPublishDirectory="Never" />
+  </ItemGroup>
+
 </Project>

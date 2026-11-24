@@ -8,3 +8,6 @@ tests
 .env
 *.md
 docker-compose*.yml
+**/appsettings.local.json
+**/appsettings.*.local.json
+**/appsettings.local.*.json
