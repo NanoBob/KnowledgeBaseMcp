@@ -20,7 +20,7 @@ public sealed class ApiKeysController(ApiKeyService keys) : ControllerBase
     public async Task<IActionResult> Create([FromBody] CreateApiKeyRequest request, CancellationToken ct)
     {
         var scopes = request.Scopes?.Select(s => new KeyScopeInput(s.DirectoryId, s.Access)).ToList();
-        var (record, plainText) = await keys.CreateAsync(request.Name, scopes, ct);
+        var (record, plainText) = await keys.CreateAsync(request.Name, scopes, request.AllowGitRead ?? false, ct);
         return Created($"/admin/api-keys/{record.Id}", ToCreatedResponse(record, plainText));
     }
 
@@ -50,6 +50,25 @@ public sealed class ApiKeysController(ApiKeyService keys) : ControllerBase
         return Ok(ToSummaryResponse(record));
     }
 
+    /// <summary>Grants or withdraws permission to clone the read-only git repository.</summary>
+    /// <response code="404">No key has this id.</response>
+    [HttpPut("{id:guid}/git-access")]
+    [ProducesResponseType(typeof(ApiKeySummaryResponse), StatusCodes.Status200OK, AdminMediaTypes.Json)]
+    [ProducesResponseType(typeof(AdminErrorResponse), StatusCodes.Status404NotFound, AdminMediaTypes.Json)]
+    public async Task<IActionResult> UpdateGitAccess(
+        Guid id,
+        [FromBody] UpdateApiKeyGitAccessRequest request,
+        CancellationToken ct)
+    {
+        if (request.AllowGitRead is null)
+        {
+            throw KnowledgeException.Validation("allowGitRead is required.");
+        }
+
+        var record = await keys.UpdateGitAccessAsync(id, request.AllowGitRead.Value, ct);
+        return Ok(ToSummaryResponse(record));
+    }
+
     /// <summary>Lists the keys. The plaintext value is never returned here.</summary>
     [HttpGet]
     [ProducesResponseType(typeof(IEnumerable<ApiKeySummaryResponse>), StatusCodes.Status200OK, AdminMediaTypes.Json)]
@@ -74,8 +93,15 @@ public sealed class ApiKeysController(ApiKeyService keys) : ControllerBase
         new(scope.DirectoryId, scope.Access.ToString().ToLowerInvariant());
 
     private static ApiKeyCreatedResponse ToCreatedResponse(ApiKeyRecord record, string plainText) =>
-        new(record.Id, record.Name, plainText, record.Scopes.Select(ToDto).ToList(), record.CreatedAt);
+        new(record.Id, record.Name, plainText, record.Scopes.Select(ToDto).ToList(), record.AllowGitRead, record.CreatedAt);
 
     private static ApiKeySummaryResponse ToSummaryResponse(ApiKeyRecord record) =>
-        new(record.Id, record.Name, record.Scopes.Select(ToDto).ToList(), record.CreatedAt, record.RotatedAt, record.RevokedAt);
+        new(
+            record.Id,
+            record.Name,
+            record.Scopes.Select(ToDto).ToList(),
+            record.AllowGitRead,
+            record.CreatedAt,
+            record.RotatedAt,
+            record.RevokedAt);
 }

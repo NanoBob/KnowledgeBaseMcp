@@ -83,14 +83,6 @@ public sealed class DocumentTransferService(
     private static readonly StringComparer NameComparer =
         StringComparer.Create(CultureInfo.GetCultureInfo("en"), CompareOptions.IgnoreCase);
 
-    private static readonly char[] InvalidFileNameChars = ['<', '>', ':', '"', '/', '\\', '|', '?', '*'];
-    private static readonly HashSet<string> ReservedFileNames = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "CON", "PRN", "AUX", "NUL",
-        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
-        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"
-    };
-
     private TransferOptions Options => options.Value;
 
     /// <summary>
@@ -143,7 +135,7 @@ public sealed class DocumentTransferService(
                 usedFileNames[document.DirectoryId] = used;
             }
 
-            var path = $"{directoryName}/{UniqueFileName(document.Name, document.Id, used)}.md";
+            var path = DocumentFileNames.RelativePath(directoryName, document.Name, document.Id, used);
             fileNames[document.Id] = path;
             manifestDocuments.Add(new TransferDocument(
                 directoryName,
@@ -683,47 +675,6 @@ public sealed class DocumentTransferService(
 
         // A byte order mark is an encoding artefact, not part of the document.
         return text.StartsWith('\uFEFF') ? text[1..] : text;
-    }
-
-    private static string UniqueFileName(string name, Guid id, HashSet<string> used)
-    {
-        var baseName = SanitizeFileName(name, id);
-        if (used.Add(baseName))
-        {
-            return baseName;
-        }
-
-        var suffix = id.ToString("N")[..8];
-        var candidate = $"{baseName}-{suffix}";
-        var attempt = 2;
-        while (!used.Add(candidate))
-        {
-            candidate = $"{baseName}-{suffix}-{attempt++}";
-        }
-
-        return candidate;
-    }
-
-    private static string SanitizeFileName(string name, Guid id)
-    {
-        var builder = new StringBuilder(name.Length);
-        foreach (var character in name)
-        {
-            builder.Append(char.IsControl(character) || InvalidFileNameChars.Contains(character) ? '-' : character);
-        }
-
-        var sanitized = builder.ToString().Trim().TrimEnd('.', ' ');
-        if (sanitized.Length == 0)
-        {
-            sanitized = "document";
-        }
-
-        if (sanitized.Length > 80)
-        {
-            sanitized = sanitized[..80].TrimEnd('.', ' ');
-        }
-
-        return ReservedFileNames.Contains(sanitized) ? $"{sanitized}-{id.ToString("N")[..8]}" : sanitized;
     }
 
     private sealed record ImportPlan(

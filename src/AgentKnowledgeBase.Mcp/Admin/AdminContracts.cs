@@ -7,7 +7,7 @@ namespace AgentKnowledgeBase.Mcp.Admin;
 /// </summary>
 public sealed record AdminErrorResponse(string? Error, string? Kind, int? LatestVersion);
 
-public sealed record CreateApiKeyRequest(string? Name, List<CreateKeyScope>? Scopes);
+public sealed record CreateApiKeyRequest(string? Name, List<CreateKeyScope>? Scopes, bool? AllowGitRead);
 
 public sealed record CreateKeyScope(Guid? DirectoryId, string? Access);
 
@@ -16,9 +16,11 @@ public sealed record KeyScopeResponse(Guid DirectoryId, string Access);
 
 public sealed record UpdateApiKeyScopesRequest(List<CreateKeyScope>? Scopes);
 
-public sealed record ApiKeyCreatedResponse(Guid Id, string Name, string Key, IReadOnlyList<KeyScopeResponse> Scopes, DateTime CreatedAt);
+public sealed record UpdateApiKeyGitAccessRequest(bool? AllowGitRead);
 
-public sealed record ApiKeySummaryResponse(Guid Id, string Name, IReadOnlyList<KeyScopeResponse> Scopes, DateTime CreatedAt, DateTime? RotatedAt, DateTime? RevokedAt);
+public sealed record ApiKeyCreatedResponse(Guid Id, string Name, string Key, IReadOnlyList<KeyScopeResponse> Scopes, bool AllowGitRead, DateTime CreatedAt);
+
+public sealed record ApiKeySummaryResponse(Guid Id, string Name, IReadOnlyList<KeyScopeResponse> Scopes, bool AllowGitRead, DateTime CreatedAt, DateTime? RotatedAt, DateTime? RevokedAt);
 
 public sealed record CreateDirectoryRequest(string? Name, string? Description);
 

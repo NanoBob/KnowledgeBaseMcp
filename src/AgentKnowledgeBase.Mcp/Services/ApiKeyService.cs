@@ -15,6 +15,7 @@ public sealed class ApiKeyService(IApiKeyRepository keys, IDirectoryRepository d
     public async Task<(ApiKeyRecord Record, string PlainTextKey)> CreateAsync(
         string? name,
         IEnumerable<KeyScopeInput>? scopes,
+        bool allowGitRead,
         CancellationToken ct)
     {
         var trimmedName = name?.Trim() ?? "";
@@ -32,6 +33,7 @@ public sealed class ApiKeyService(IApiKeyRepository keys, IDirectoryRepository d
             Name = trimmedName,
             KeyHash = Hash(plainText),
             Scopes = parsedScopes,
+            AllowGitRead = allowGitRead,
             CreatedAt = DateTime.UtcNow
         };
 
@@ -76,6 +78,14 @@ public sealed class ApiKeyService(IApiKeyRepository keys, IDirectoryRepository d
         }
     }
 
+    /// <summary>
+    /// Grants or withdraws permission to clone the read-only git repository. The secret and the
+    /// directory scopes are untouched, so an agent keeps working while its git access changes.
+    /// </summary>
+    public async Task<ApiKeyRecord> UpdateGitAccessAsync(Guid id, bool allowGitRead, CancellationToken ct) =>
+        await keys.TryUpdateGitAccessAsync(id, allowGitRead, ct)
+            ?? throw KnowledgeException.NotFound($"no active API key with id '{id}'.");
+
     /// <summary>Resolves a presented key to its caller. Returns null for unknown or revoked keys.</summary>
     public async Task<ApiCaller?> AuthenticateAsync(string? presentedKey, CancellationToken ct)
     {
@@ -90,7 +100,7 @@ public sealed class ApiKeyService(IApiKeyRepository keys, IDirectoryRepository d
             return null;
         }
 
-        return new ApiCaller(record.Id, record.Name, record.Scopes);
+        return new ApiCaller(record.Id, record.Name, record.Scopes, AllowGitRead: record.AllowGitRead);
     }
 
     public static string Hash(string plainText) =>
